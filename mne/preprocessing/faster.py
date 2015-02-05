@@ -1,7 +1,9 @@
 import numpy as np
 from collections import defaultdict
+from operator import add
 from scipy.signal import welch, lfilter
 from scipy.stats import kurtosis
+from functools import reduce
 from . import find_outliers
 from ..utils import logger
 from ..io.pick import pick_types, channel_type
