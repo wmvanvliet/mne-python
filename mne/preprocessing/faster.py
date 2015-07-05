@@ -391,7 +391,7 @@ def faster_bad_components(ica, epochs, thres=3, use_metrics=None,
 
 
 def faster_bad_channels_in_epochs(epochs, picks=None, thres=3,
-                                  use_metrics=None, max_iter=2,
+                                  use_metrics=None, max_iter=1,
                                   return_by_metric=False):
     """Implements the fourth step of the FASTER algorithm.
 
@@ -441,23 +441,27 @@ def faster_bad_channels_in_epochs(epochs, picks=None, thres=3,
 
     data = epochs.get_data()
 
-    bads = defaultdict(lambda: [list() for _ in range(len(epochs))])
+    bads = dict((m, np.zeros((len(data), len(picks)), dtype=bool)) for
+                m in metrics)
     for ch_type, chs in _by_ch_type(epochs.info, picks):
-        for m in use_metrics:
+        ch_names = [epochs.ch_names[k] for k in chs]
+        chs = np.array(chs)
+        for metric in use_metrics:
             logger.info('Bad channel-in-epoch detection on %s channels:'
                         % ch_type.upper())
-            s_epochs = metrics[m](data[:, chs])
-            for i, s in enumerate(s_epochs):
-                b = [epochs.ch_names[picks[j]]
-                     for j in find_outliers(s, thres, max_iter)]
-                if len(b) > 0:
-                    logger.info('Epoch %d, Bad by %s:\n\t%s' % (i, m, b))
-                bads[m][i].append(b)
+            s_epochs = metrics[metric](data[:, chs])
+            for i_epochs, epoch in enumerate(s_epochs):
+                outliers = find_outliers(epoch, thres, max_iter)
+                if len(outliers) > 0:
+                    bads_epoch = [ch_names[k] for k in outliers]
+                    logger.info('Epoch %d, Bad by %s:\n\t%s' % (
+                        i_epochs, metric, bads_epoch))
+                    bads[metric][i_epochs, chs[outliers]] = True
 
-    bads = {k: sum(v, []) for k, v in bads.items()}
+
     if return_by_metric:
-        return dict(bads)
+        bads = dict((m, [np.where(b)[0] for b in v]) for m, v in bads.items())
     else:
-        bads = [np.unique(np.concatenate(b_)).tolist()
-                for b_ in bads.values() if len(b_) > 0]
-        return bads
+        bads = np.sum(bads.values(), axis=0).astype(bool)
+        bads = [np.where(m)[0] for m in bads]
+    return bads

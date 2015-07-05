@@ -83,7 +83,7 @@ for i, b in enumerate(bad_channels_per_epoch):
     if len(b) > 0:
         epoch = epochs[i]
         epoch.info['bads'] += b
-        epoch.interpolate_bads_eeg()
+        epoch.interpolate_bads()
         epochs._data[i, :, :] = epoch._data[0, :, :]
 
 # Compute evoked after cleaning, using an average EEG reference
