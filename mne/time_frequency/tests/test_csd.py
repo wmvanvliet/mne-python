@@ -10,13 +10,13 @@ import pickle
 from itertools import product
 
 from pytest import raises
-from numpy.testing import assert_array_equal
+from numpy.testing import assert_array_equal, assert_allclose
 import numpy as np
 
 import mne
 from mne.utils import run_tests_if_main, _TempDir, requires_h5py
 from mne.time_frequency import (csd_epochs, csd_array, CrossSpectralDensity,
-                                read_csd, pick_channels_csd)
+                                read_csd, pick_channels_csd, psd_multitaper)
 from mne.time_frequency.csd import _sym_mat_to_vector, _vector_to_sym_mat
 
 warnings.simplefilter('always')
@@ -312,7 +312,7 @@ def _test_csd_on_artificial_data(csd):
     assert np.abs(csd_10[1, 2].imag) > 0.4
 
     # No phase differences at 22 Hz
-    assert np.all(np.abs(csd_22[0, 2].imag) < 1E-3)
+    assert np.all(np.abs(csd_22[0, 2].imag) < 2E-3)
 
     # Test CSD between the two channels that have a 20Hz signal and the one
     # that has only a 10 Hz signal
@@ -376,6 +376,15 @@ def test_csd_epochs():
             csd = csd.mean([9.9, 14.9, 21.9], [10.1, 15.1, 22.1])
 
         _test_csd_on_artificial_data(csd)
+
+    # Test equivalence with psd_multitaper
+    psd, psd_freqs = psd_multitaper(epochs, fmin=1e-3,
+                                    normalization='full')  # omit DC
+    csd = csd_epochs(epochs, fsum=False)
+    assert_allclose(psd_freqs, csd.frequencies)
+    csd = np.array([np.diag(csd.get_data(index=ii))
+                    for ii in range(len(csd))]).T
+    assert_allclose(psd[0], csd)
 
     # Test summing across frequencies
     csd1 = csd_epochs(epochs, mode='cwt_morlet', frequencies=freqs, fsum=False,
