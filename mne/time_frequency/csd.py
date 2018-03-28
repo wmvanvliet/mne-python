@@ -98,6 +98,9 @@ class CrossSpectralDensity(object):
         # of lists (or like-like objects) instead of plain numbers.
         return not isinstance(self.frequencies[0], numbers.Number)
 
+    def __len__(self):  # noqa: D105
+        return len(self.frequencies)
+
     def __repr__(self):  # noqa: D105
         # Make a pretty string representation of the frequencies
         freq_strs = []
@@ -766,7 +769,7 @@ def csd_array(X, sfreq, t0=0, mode='multitaper', fmin=0, fmax=np.inf,
     # Preparing for computing CSD
     logger.info('Computing cross-spectral density from epochs...')
 
-    if mode == 'multitaper' or mode == 'fourier':
+    if mode in ('multitaper', 'fourier'):
         # Slice X to the requested time window
         tstart = None if tmin is None else np.searchsorted(times, tmin - 1e-10)
         tstop = None if tmax is None else np.searchsorted(times, tmax + 1e-10)
@@ -824,7 +827,7 @@ def csd_array(X, sfreq, t0=0, mode='multitaper', fmin=0, fmax=np.inf,
                                             verbose=verbose)
     else:
         raise ValueError("The mode parameter must be either 'cwt_morlet', "
-                         "'multitaper' or 'fourier'.")
+                         "'multitaper' or 'fourier', got %s." % (mode,))
 
     n_freqs = len(frequencies)
     n_freqs_in_csd = 1 if fsum else n_freqs
@@ -913,7 +916,7 @@ def _compute_mt_params(n_times, sfreq, mode, mt_bandwidth, mt_low_bias,
         if mt_bandwidth is not None:
             half_nbw = float(mt_bandwidth) * n_times / (2. * sfreq)
         else:
-            half_nbw = 2.
+            half_nbw = 4.
 
         # Compute DPSS windows
         n_tapers_max = int(2 * half_nbw)
@@ -988,7 +991,7 @@ def _csd_multitaper(X, sfreq, n_times, window_fun, eigvals, freq_mask,
             weights = np.sqrt(eigvals)[np.newaxis, np.newaxis, :, np.newaxis]
         else:
             # Hack so we can sum over axis=-2
-            weights = np.array([1.])[:, np.newaxis, np.newaxis, np.newaxis]
+            weights = np.ones((1,) * 4)
 
     x_mt = x_mt[:, :, freq_mask_mt]
 
