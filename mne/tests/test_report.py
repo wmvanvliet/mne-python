@@ -111,11 +111,6 @@ def test_render_report():
                 overwrite=True)
     assert (op.isfile(op.join(tempdir, 'report.html')))
 
-    # Check saving as HDF5
-    report.save(fname=op.join(tempdir, 'report.hdf5'), open_browser=False,
-                overwrite=True)
-    assert (op.isfile(op.join(tempdir, 'report.hdf5')))
-
     # Check pattern matching with multiple patterns
     pattern = ['*raw.fif', '*eve.fif']
     with pytest.warns(RuntimeWarning, match='Cannot render MRI'):
