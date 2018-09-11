@@ -18,7 +18,7 @@ from mne.io import read_raw_fif
 from mne.datasets import testing
 from mne.report import Report, open_report, read_report
 from mne.utils import (_TempDir, requires_mayavi, requires_nibabel,
-                       run_tests_if_main, traits_test)
+                       run_tests_if_main, traits_test, requires_h5py)
 from mne.viz import plot_alignment
 
 import matplotlib
@@ -312,6 +312,7 @@ def test_validate_input():
     assert_equal(len(comments_new), len(items))
 
 
+@requires_h5py
 def test_open_read_report():
     """Test the open_report and read_report functions."""
     tempdir = _TempDir()
