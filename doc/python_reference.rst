@@ -1057,6 +1057,13 @@ MNE-Report
 
    Report
 
+.. autosummary::
+   :toctree: generated/
+   :template: function.rst
+
+    open_report
+    read_report
+
 
 Logging and Configuration
 =========================

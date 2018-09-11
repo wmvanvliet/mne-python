@@ -47,6 +47,10 @@ Changelog
 
 - :func:`mne.combine_evoked` and :func:`mne.grand_average` can now handle input with the same channels in different orders, if required, by `Jona Sassenhagen`_
 
+- Add capability to save a :class:`mne.Report` to an HDF5 file to :meth:`mne.Report.save` by `Marijn van Vliet`_
+
+- Add :func:`mne.open_report` and :func:`mne.read_report` to read back a :class:`mne.Report` object that was saved to an HDF5 file by `Marijn van Vliet`_
+
 Bug
 ~~~
 

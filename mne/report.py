@@ -15,6 +15,7 @@ import codecs
 import time
 from glob import glob
 import warnings
+from contextlib import contextmanager
 
 import numpy as np
 
@@ -32,6 +33,7 @@ from .viz.raw import _data_types
 from .externals.tempita import HTMLTemplate, Template
 from .externals.six import BytesIO
 from .externals.six import moves
+from .externals.h5io import read_hdf5, write_hdf5
 
 VALID_EXTENSIONS = ['raw.fif', 'raw.fif.gz', 'sss.fif', 'sss.fif.gz',
                     '-eve.fif', '-eve.fif.gz', '-cov.fif', '-cov.fif.gz',
@@ -314,6 +316,62 @@ def _iterate_files(report, fnames, info, cov, baseline, sfreq, on_error,
         _update_html(html, report_fname, report_sectionlabel)
 
     return htmls, report_fnames, report_sectionlabels
+
+
+def read_report(fname):
+    """Read a saved report that was saved as an HDF5 file.
+
+    Parameters
+    ----------
+    fname : str
+        The file name of the report to read. Must be in HDF5 format.
+
+    Returns
+    -------
+    report : instance of Report
+        The report that was read from the file.
+    """
+    report = Report()
+    report.__setstate__(read_hdf5(fname, title='mnepython'))
+    return report
+
+
+@contextmanager
+def open_report(hdf5_filename, html_filename=None, **params):
+    """Read a saved report or, if it doesn't exist yet, create a new one.
+
+    The returned report is used as a context manager and any changes to the
+    report are saved when exiting the context block.
+
+    Parameters
+    ----------
+    hdf5_filename : str
+        The file containing the report, stored in the HDF5 format. If the file
+        does not exist yet, a new report is created that will be saved to the
+        specified file.
+    html_filename : str | None
+        The file containing the report, rendered as an HTML page. When this is
+        specified and this function is used as a context manager, the report
+        is rendered to HTML when exiting the context block, in addition to
+        being saved to the HDF5 file.
+    **params : list of parameters
+        Parameters to use when creating a new Report object.
+
+    Returns
+    -------
+    report : instance of Report
+        The report.
+    """
+    try:
+        if op.exists(hdf5_filename):
+            report = read_report(hdf5_filename)
+        else:
+            report = Report(**params)
+        yield report
+    finally:
+        report.save(hdf5_filename, open_browser=False, overwrite=True)
+        if html_filename is not None:
+            report.save(html_filename, open_browser=False, overwrite=True)
 
 
 ###############################################################################
@@ -1354,17 +1412,79 @@ class Report(object):
                 warn('`subjects_dir` and `subject` not provided. Cannot '
                      'render MRI and -trans.fif(.gz) files.')
 
+    def __getstate__(self):
+        """Get the state of the report as a dictionary."""
+        state = dict(
+            baseline=self.baseline,
+            cov_fname=self.cov_fname,
+            fnames=self.fnames,
+            html=self.html,
+            include=self.include,
+            image_format=self.image_format,
+            info_fname=self.info_fname,
+            initial_id=self.initial_id,
+            raw_psd=self.raw_psd,
+            _sectionlabels=self._sectionlabels,
+            sections=self.sections,
+            _sectionvars=self._sectionvars,
+            _sort_sections=self._sort_sections,
+            subjects_dir=self.subjects_dir,
+            subject=self.subject,
+            title=self.title,
+            verbose=self.verbose,
+        )
+        if hasattr(self, 'data_path'):
+            state['data_path'] = self.data_path
+        if hasattr(self, '_sort'):
+            state['_sort'] = self._sort
+        return state
+
+    def __setstate__(self, state):
+        """Set the state of the report."""
+        self.baseline = state['baseline']
+        self.cov_fname = state['cov_fname']
+        self.fnames = state['fnames']
+        self.html = state['html']
+        self.include = state['include']
+        self.image_format = state['image_format']
+        self.info_fname = state['info_fname']
+        self.initial_id = state['initial_id']
+        self.raw_psd = state['raw_psd']
+        self._sectionlabels = state['_sectionlabels']
+        self.sections = state['sections']
+        self._sectionvars = state['_sectionvars']
+        self._sort_sections = state['_sort_sections']
+        self.subjects_dir = state['subjects_dir']
+        self.subject = state['subject']
+        self.title = state['title']
+        self.verbose = state['verbose']
+        if 'data_path' in state:
+            self.data_path = state['data_path']
+        if '_sort' in state:
+            self._sort = state['_sort']
+
     def save(self, fname=None, open_browser=True, overwrite=False):
-        """Save html report and open it in browser.
+        """Save the report and optionally open it in browser.
 
         Parameters
         ----------
-        fname : str
-            File name of the report.
+        fname : str | None
+            File name of the report. If the file name ends in '.h5' or '.hdf5',
+            the report is saved in HDF5 format, so it can later be loaded again
+            with :func:`open_report`. If the file name ends in anything else,
+            the report is rendered to HTML. If ``None``, the report is saved to
+            'report.html' in the ``data_path`` folder.
+            Defaults to ``None``.
         open_browser : bool
-            Open html browser after saving if True.
+            When saving to HTML, open the rendered HTML file browser after
+            saving if True. Defaults to True.
         overwrite : bool
-            If True, overwrite report if it already exists.
+            If True, overwrite report if it already exists. Defaults to False.
+
+        Returns
+        -------
+        fname : str
+            The file name to which the report was saved.
         """
         if fname is None:
             if not hasattr(self, 'data_path'):
@@ -1375,14 +1495,6 @@ class Report(object):
         else:
             fname = op.realpath(fname)
 
-        self._render_toc()
-
-        with warnings.catch_warnings(record=True):
-            warnings.simplefilter('ignore')
-            html = footer_template.substitute(date=time.strftime("%B %d, %Y"),
-                                              current_year=time.strftime("%Y"))
-        self.html.append(html)
-
         if not overwrite and op.isfile(fname):
             msg = ('Report already exists at location %s. '
                    'Overwrite it (y/[n])? '
@@ -1391,18 +1503,36 @@ class Report(object):
             if answer.lower() == 'y':
                 overwrite = True
 
+        _, ext = op.splitext(fname)
+        is_hdf5 = (ext.lower() == '.h5' or ext.lower() == '.hdf5')
+
         if overwrite or not op.isfile(fname):
             logger.info('Saving report to location %s' % fname)
-            fobj = codecs.open(fname, 'w', 'utf-8')
-            fobj.write(_fix_global_ids(u''.join(self.html)))
-            fobj.close()
 
-            # remove header, TOC and footer to allow more saves
-            self.html.pop(0)
-            self.html.pop(0)
-            self.html.pop()
+            if is_hdf5:
+                write_hdf5(fname, self.__getstate__(), overwrite=overwrite,
+                           title='mnepython')
+            else:
+                try:
+                    self._render_toc()
 
-        if open_browser:
+                    with warnings.catch_warnings(record=True):
+                        warnings.simplefilter('ignore')
+                        html = footer_template.substitute(
+                            date=time.strftime("%B %d, %Y"),
+                            current_year=time.strftime("%Y"))
+                    self.html.append(html)
+
+                    # Write HTML
+                    with codecs.open(fname, 'w', 'utf-8') as fobj:
+                        fobj.write(_fix_global_ids(u''.join(self.html)))
+                finally:
+                    # remove header, TOC and footer to allow more saves
+                    self.html.pop(0)
+                    self.html.pop(0)
+                    self.html.pop()
+
+        if open_browser and not is_hdf5:
             import webbrowser
             webbrowser.open_new_tab('file://' + fname)
 

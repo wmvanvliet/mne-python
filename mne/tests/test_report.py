@@ -16,7 +16,7 @@ import pytest
 from mne import Epochs, read_events, read_evokeds
 from mne.io import read_raw_fif
 from mne.datasets import testing
-from mne.report import Report
+from mne.report import Report, open_report, read_report
 from mne.utils import (_TempDir, requires_mayavi, requires_nibabel,
                        run_tests_if_main, traits_test)
 from mne.viz import plot_alignment
@@ -110,6 +110,11 @@ def test_render_report():
     report.save(fname=op.join(tempdir, 'report.html'), open_browser=False,
                 overwrite=True)
     assert (op.isfile(op.join(tempdir, 'report.html')))
+
+    # Check saving as HDF5
+    report.save(fname=op.join(tempdir, 'report.hdf5'), open_browser=False,
+                overwrite=True)
+    assert (op.isfile(op.join(tempdir, 'report.hdf5')))
 
     # Check pattern matching with multiple patterns
     pattern = ['*raw.fif', '*eve.fif']
@@ -305,6 +310,29 @@ def test_validate_input():
     values = report._validate_input(items, captions, section, comments=None)
     items_new, captions_new, comments_new = values
     assert_equal(len(comments_new), len(items))
+
+
+def test_open_read_report():
+    """Test the open_report and read_report functions."""
+    tempdir = _TempDir()
+    hdf5 = op.join(tempdir, 'report.h5')
+    html = op.join(tempdir, 'report.html')
+    import matplotlib.pyplot as plt
+    fig = plt.plot([1, 2], [1, 2])[0].figure
+
+    # Test creating a new report through the open_report function
+    with open_report(hdf5, html, subjects_dir=subjects_dir) as report:
+        assert report.subjects_dir == subjects_dir
+        report.add_figs_to_section(figs=fig, captions=['evoked response'])
+    # Exiting the context block should have triggered saving to HDF5 and HTML
+    assert op.exists(hdf5)
+    assert op.exists(html)
+
+    # Load the HDF5 version of the report and check equivalency
+    report2 = read_report(hdf5)
+    assert report2.subjects_dir == report.subjects_dir
+    assert report2.html == report.html
+    assert report2.__getstate__() == report.__getstate__()
 
 
 run_tests_if_main()
