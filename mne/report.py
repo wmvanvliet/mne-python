@@ -15,7 +15,6 @@ import codecs
 import time
 from glob import glob
 import warnings
-
 import numpy as np
 
 from . import read_evokeds, read_events, pick_types, read_cov
@@ -851,7 +850,7 @@ class Report(object):
         .. versionadded:: 0.17
     fname : str | None
         Name of the file that is used as default when saving this report.
-        Defaults to ``None``, in which case it is saves as 'report.html' in 
+        Defaults to ``None``, in which case it is saves as 'report.html' in
         the current directory, or, if the :meth:`parse_folder` method was used,
         as 'report.html' inside the parsed folder.
     verbose : bool, str, int, or None
