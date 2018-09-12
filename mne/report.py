@@ -15,7 +15,6 @@ import codecs
 import time
 from glob import glob
 import warnings
-from contextlib import contextmanager
 
 import numpy as np
 
