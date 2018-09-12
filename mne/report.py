@@ -1521,11 +1521,11 @@ class Report(object):
         return fname
 
     def __enter__(self):
-        """Called when entering the context block."""
+        """Do nothing when entering the context block."""
         return self
 
     def __exit__(self, type, value, traceback):
-        """Called when leaving the context block. Saves the report."""
+        """Save the report when leaving the context block."""
         if self.fname is not None:
             self.save(open_browser=False, overwrite=True)
         return self
