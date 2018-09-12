@@ -318,26 +318,7 @@ def _iterate_files(report, fnames, info, cov, baseline, sfreq, on_error,
     return htmls, report_fnames, report_sectionlabels
 
 
-def read_report(fname):
-    """Read a saved report that was saved as an HDF5 file.
-
-    Parameters
-    ----------
-    fname : str
-        The file name of the report to read. Must be in HDF5 format.
-
-    Returns
-    -------
-    report : instance of Report
-        The report that was read from the file.
-    """
-    report = Report()
-    report.__setstate__(read_hdf5(fname, title='mnepython'))
-    return report
-
-
-@contextmanager
-def open_report(hdf5_filename, html_filename=None, **params):
+def open_report(fname, **params):
     """Read a saved report or, if it doesn't exist yet, create a new one.
 
     The returned report is used as a context manager and any changes to the
@@ -345,15 +326,10 @@ def open_report(hdf5_filename, html_filename=None, **params):
 
     Parameters
     ----------
-    hdf5_filename : str
+    fname : str
         The file containing the report, stored in the HDF5 format. If the file
         does not exist yet, a new report is created that will be saved to the
         specified file.
-    html_filename : str | None
-        The file containing the report, rendered as an HTML page. When this is
-        specified and this function is used as a context manager, the report
-        is rendered to HTML when exiting the context block, in addition to
-        being saved to the HDF5 file.
     **params : list of parameters
         Parameters to use when creating a new Report object.
 
@@ -362,16 +338,13 @@ def open_report(hdf5_filename, html_filename=None, **params):
     report : instance of Report
         The report.
     """
-    try:
-        if op.exists(hdf5_filename):
-            report = read_report(hdf5_filename)
-        else:
-            report = Report(**params)
-        yield report
-    finally:
-        report.save(hdf5_filename, open_browser=False, overwrite=True)
-        if html_filename is not None:
-            report.save(html_filename, open_browser=False, overwrite=True)
+    if op.exists(fname):
+        # Don't pass **params to the Report
+        report = Report(fname=fname)
+        report.__setstate__(read_hdf5(fname, title='mnepython'))
+    else:
+        report = Report(fname=fname, **params)
+    return report
 
 
 ###############################################################################
@@ -877,6 +850,11 @@ class Report(object):
         :meth:`mne.io.Raw.plot_psd`.
 
         .. versionadded:: 0.17
+    fname : str | None
+        Name of the file that is used as default when saving this report.
+        Defaults to ``None``, in which case it is saves as 'report.html' in 
+        the current directory, or, if the :meth:`parse_folder` method was used,
+        as 'report.html' inside the parsed folder.
     verbose : bool, str, int, or None
         If not None, override default verbose level (see :func:`mne.verbose`
         and :ref:`Logging documentation <tut_logging>` for more).
@@ -890,7 +868,7 @@ class Report(object):
 
     def __init__(self, info_fname=None, subjects_dir=None,
                  subject=None, title=None, cov_fname=None, baseline=None,
-                 image_format='png', raw_psd=False, verbose=None):
+                 image_format='png', raw_psd=False, fname=None, verbose=None):
         self.info_fname = info_fname
         self.cov_fname = cov_fname
         self.baseline = baseline
@@ -913,6 +891,7 @@ class Report(object):
             raise TypeError('raw_psd must be bool or dict, got %s'
                             % (type(raw_psd),))
         self.raw_psd = raw_psd
+        self.fname = fname
         self._init_render()  # Initialize the renderer
 
     def __repr__(self):
@@ -1414,6 +1393,7 @@ class Report(object):
 
     def __getstate__(self):
         """Get the state of the report as a dictionary."""
+        # Note: self.fname is not part of the state
         state = dict(
             baseline=self.baseline,
             cov_fname=self.cov_fname,
@@ -1441,6 +1421,7 @@ class Report(object):
 
     def __setstate__(self, state):
         """Set the state of the report."""
+        # Note: self.fname is not part of the state
         self.baseline = state['baseline']
         self.cov_fname = state['cov_fname']
         self.fnames = state['fnames']
@@ -1487,13 +1468,15 @@ class Report(object):
             The file name to which the report was saved.
         """
         if fname is None:
-            if not hasattr(self, 'data_path'):
-                self.data_path = op.dirname(__file__)
-                warn('`data_path` not provided. Using %s instead'
-                     % self.data_path)
-            fname = op.realpath(op.join(self.data_path, 'report.html'))
-        else:
-            fname = op.realpath(fname)
+            if self.fname is None:
+                if not hasattr(self, 'data_path'):
+                    self.data_path = op.dirname(__file__)
+                    warn('`data_path` not provided. Using %s instead'
+                         % self.data_path)
+                fname = op.join(self.data_path, 'report.html')
+            else:
+                fname = self.fname
+        fname = op.realpath(fname)
 
         if not overwrite and op.isfile(fname):
             msg = ('Report already exists at location %s. '
@@ -1536,7 +1519,18 @@ class Report(object):
             import webbrowser
             webbrowser.open_new_tab('file://' + fname)
 
+        self.fname = fname
         return fname
+
+    def __enter__(self):
+        """Called when entering the context block."""
+        return self
+
+    def __exit__(self, type, value, traceback):
+        """Called when leaving the context block. Saves the report."""
+        if self.fname is not None:
+            self.save(open_browser=False, overwrite=True)
+        return self
 
     @verbose
     def _render_toc(self, verbose=None):

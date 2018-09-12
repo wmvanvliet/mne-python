@@ -49,7 +49,7 @@ Changelog
 
 - Add capability to save a :class:`mne.Report` to an HDF5 file to :meth:`mne.Report.save` by `Marijn van Vliet`_
 
-- Add :func:`mne.open_report` and :func:`mne.read_report` to read back a :class:`mne.Report` object that was saved to an HDF5 file by `Marijn van Vliet`_
+- Add :func:`mne.open_report` to read back a :class:`mne.Report` object that was saved to an HDF5 file by `Marijn van Vliet`_
 
 Bug
 ~~~
