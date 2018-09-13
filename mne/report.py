@@ -344,11 +344,11 @@ def open_report(fname, **params):
         state = read_hdf5(fname, title='mnepython')
         for param in params.keys():
             if param not in state:
-                raise RuntimeError('The loaded report has no attribute %s' %
-                                   param)
+                raise ValueError('The loaded report has no attribute %s' %
+                                 param)
             if params[param] != state[param]:
-                raise RuntimeError("Attribute '%s' of loaded report does not "
-                                   "match the given parameter." % param)
+                raise ValueError("Attribute '%s' of loaded report does not "
+                                 "match the given parameter." % param)
         report = Report()
         report.__setstate__(state)
     else:

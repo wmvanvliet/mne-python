@@ -309,7 +309,7 @@ def test_validate_input():
 
 @requires_h5py
 def test_open_read_report():
-    """Test the open_report and read_report functions."""
+    """Test the open_report function."""
     tempdir = _TempDir()
     hdf5 = op.join(tempdir, 'report.h5')
     import matplotlib.pyplot as plt
@@ -332,8 +332,8 @@ def test_open_read_report():
     assert '_fname' not in report2.__getstate__()
 
     # Check parameters when loading a report
-    pytest.raises(RuntimeError, open_report, hdf5, foo='bar')  # non-existing
-    pytest.raises(RuntimeError, open_report, hdf5, subjects_dir='foo')
+    pytest.raises(ValueError, open_report, hdf5, foo='bar')  # non-existing
+    pytest.raises(ValueError, open_report, hdf5, subjects_dir='foo')
     open_report(hdf5, subjects_dir=subjects_dir)  # This should work
 
 
