@@ -1477,7 +1477,7 @@ class Report(object):
                 overwrite = True
 
         _, ext = op.splitext(fname)
-        is_hdf5 = (ext.lower() == '.h5' or ext.lower() == '.hdf5')
+        is_hdf5 = ext.lower() in ['.h5', '.hdf5']
 
         if overwrite or not op.isfile(fname):
             logger.info('Saving report to location %s' % fname)
