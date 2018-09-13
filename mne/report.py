@@ -1486,21 +1486,24 @@ class Report(object):
                 write_hdf5(fname, self.__getstate__(), overwrite=overwrite,
                            title='mnepython')
             else:
+                self._render_toc()
+
+                # Annotate the HTML with a TOC and footer.
+                with warnings.catch_warnings(record=True):
+                    warnings.simplefilter('ignore')
+                    html = footer_template.substitute(
+                        date=time.strftime("%B %d, %Y"),
+                        current_year=time.strftime("%Y"))
+                self.html.append(html)
+
+                # Writing to disk may fail. However, we need to make sure that
+                # the TOC and footer are removed regardless, otherwise they
+                # will be duplicated when the user attempts to save again.
                 try:
-                    self._render_toc()
-
-                    with warnings.catch_warnings(record=True):
-                        warnings.simplefilter('ignore')
-                        html = footer_template.substitute(
-                            date=time.strftime("%B %d, %Y"),
-                            current_year=time.strftime("%Y"))
-                    self.html.append(html)
-
                     # Write HTML
                     with codecs.open(fname, 'w', 'utf-8') as fobj:
                         fobj.write(_fix_global_ids(u''.join(self.html)))
                 finally:
-                    # remove header, TOC and footer to allow more saves
                     self.html.pop(0)
                     self.html.pop(0)
                     self.html.pop()
