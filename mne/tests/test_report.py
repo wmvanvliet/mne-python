@@ -308,7 +308,7 @@ def test_validate_input():
 
 
 @requires_h5py
-def test_open_read_report():
+def test_open_report():
     """Test the open_report function."""
     tempdir = _TempDir()
     hdf5 = op.join(tempdir, 'report.h5')
