@@ -319,8 +319,8 @@ def _iterate_files(report, fnames, info, cov, baseline, sfreq, on_error,
 def open_report(fname, **params):
     """Read a saved report or, if it doesn't exist yet, create a new one.
 
-    The returned report is used as a context manager and any changes to the
-    report are saved when exiting the context block.
+    The returned report can be used as a context manager, in which case any
+    changes to the report are saved when exiting the context block.
 
     Parameters
     ----------
@@ -329,7 +329,10 @@ def open_report(fname, **params):
         does not exist yet, a new report is created that will be saved to the
         specified file.
     **params : list of parameters
-        Parameters to use when creating a new Report object.
+        When creating a new report, any named parameters other than ``fname``
+        are passed to the `__init__` function of the `Report` object. When
+        reading an existing report, the parameters are checked with the
+        loaded report and an exception is raised when they don't match.
 
     Returns
     -------
@@ -337,11 +340,22 @@ def open_report(fname, **params):
         The report.
     """
     if op.exists(fname):
-        # Don't pass **params to the Report
-        report = Report(fname=fname)
-        report.__setstate__(read_hdf5(fname, title='mnepython'))
+        # Check **params with the loaded report
+        state = read_hdf5(fname, title='mnepython')
+        for param in params.keys():
+            if param not in state:
+                raise RuntimeError('The loaded report has no attribute %s' %
+                                   param)
+            if params[param] != state[param]:
+                raise RuntimeError("Attribute '%s' of loaded report does not "
+                                   "match the given parameter." % param)
+        report = Report()
+        report.__setstate__(state)
     else:
-        report = Report(fname=fname, **params)
+        report = Report(**params)
+    # Keep track of the filename in case the Report object is used as a context
+    # manager.
+    report._fname = fname
     return report
 
 
@@ -848,11 +862,6 @@ class Report(object):
         :meth:`mne.io.Raw.plot_psd`.
 
         .. versionadded:: 0.17
-    fname : str | None
-        Name of the file that is used as default when saving this report.
-        Defaults to ``None``, in which case it is saves as 'report.html' in
-        the current directory, or, if the :meth:`parse_folder` method was used,
-        as 'report.html' inside the parsed folder.
     verbose : bool, str, int, or None
         If not None, override default verbose level (see :func:`mne.verbose`
         and :ref:`Logging documentation <tut_logging>` for more).
@@ -866,7 +875,7 @@ class Report(object):
 
     def __init__(self, info_fname=None, subjects_dir=None,
                  subject=None, title=None, cov_fname=None, baseline=None,
-                 image_format='png', raw_psd=False, fname=None, verbose=None):
+                 image_format='png', raw_psd=False, verbose=None):
         self.info_fname = info_fname
         self.cov_fname = cov_fname
         self.baseline = baseline
@@ -889,7 +898,6 @@ class Report(object):
             raise TypeError('raw_psd must be bool or dict, got %s'
                             % (type(raw_psd),))
         self.raw_psd = raw_psd
-        self.fname = fname
         self._init_render()  # Initialize the renderer
 
     def __repr__(self):
@@ -1391,7 +1399,7 @@ class Report(object):
 
     def __getstate__(self):
         """Get the state of the report as a dictionary."""
-        # Note: self.fname is not part of the state
+        # Note: self._fname is not part of the state
         state = dict(
             baseline=self.baseline,
             cov_fname=self.cov_fname,
@@ -1419,7 +1427,7 @@ class Report(object):
 
     def __setstate__(self, state):
         """Set the state of the report."""
-        # Note: self.fname is not part of the state
+        # Note: self._fname is not part of the state
         self.baseline = state['baseline']
         self.cov_fname = state['cov_fname']
         self.fnames = state['fnames']
@@ -1452,7 +1460,7 @@ class Report(object):
             the report is saved in HDF5 format, so it can later be loaded again
             with :func:`open_report`. If the file name ends in anything else,
             the report is rendered to HTML. If ``None``, the report is saved to
-            'report.html' in the ``data_path`` folder.
+            'report.html' in the current working directory.
             Defaults to ``None``.
         open_browser : bool
             When saving to HTML, open the rendered HTML file browser after
@@ -1466,15 +1474,13 @@ class Report(object):
             The file name to which the report was saved.
         """
         if fname is None:
-            if self.fname is None:
-                if not hasattr(self, 'data_path'):
-                    self.data_path = op.dirname(__file__)
-                    warn('`data_path` not provided. Using %s instead'
-                         % self.data_path)
-                fname = op.join(self.data_path, 'report.html')
-            else:
-                fname = self.fname
-        fname = op.realpath(fname)
+            if not hasattr(self, 'data_path'):
+                self.data_path = op.dirname(__file__)
+                warn('`data_path` not provided. Using %s instead'
+                     % self.data_path)
+            fname = op.realpath(op.join(self.data_path, 'report.html'))
+        else:
+            fname = op.realpath(fname)
 
         if not overwrite and op.isfile(fname):
             msg = ('Report already exists at location %s. '
@@ -1526,8 +1532,8 @@ class Report(object):
 
     def __exit__(self, type, value, traceback):
         """Save the report when leaving the context block."""
-        if self.fname is not None:
-            self.save(open_browser=False, overwrite=True)
+        if self._fname is not None:
+            self.save(self._fname, open_browser=False, overwrite=True)
         return self
 
     @verbose

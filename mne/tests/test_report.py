@@ -318,15 +318,23 @@ def test_open_read_report():
     # Test creating a new report through the open_report function
     with open_report(hdf5, subjects_dir=subjects_dir) as report:
         assert report.subjects_dir == subjects_dir
+        assert report._fname == hdf5
         report.add_figs_to_section(figs=fig, captions=['evoked response'])
     # Exiting the context block should have triggered saving to HDF5
     assert op.exists(hdf5)
 
     # Load the HDF5 version of the report and check equivalency
     report2 = open_report(hdf5)
+    assert report2._fname == hdf5
     assert report2.subjects_dir == report.subjects_dir
     assert report2.html == report.html
     assert report2.__getstate__() == report.__getstate__()
+    assert '_fname' not in report2.__getstate__()
+
+    # Check parameters when loading a report
+    pytest.raises(RuntimeError, open_report, hdf5, foo='bar')  # non-existing
+    pytest.raises(RuntimeError, open_report, hdf5, subjects_dir='foo')
+    open_report(hdf5, subjects_dir=subjects_dir)  # This should work
 
 
 run_tests_if_main()
