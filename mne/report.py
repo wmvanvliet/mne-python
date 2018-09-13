@@ -1397,58 +1397,44 @@ class Report(object):
                 warn('`subjects_dir` and `subject` not provided. Cannot '
                      'render MRI and -trans.fif(.gz) files.')
 
+    def _get_state_params(self):
+        """Obtain all fields that are in the state dictionary of this object.
+
+        Returns
+        -------
+        non_opt_params : list of str
+            All parameters that must be present in the state dictionary.
+        opt_params : list of str
+            All parameters that are optionally present in the state dictionary.
+        """
+        # Note: self._fname is not part of the state
+        return (['baseline', 'cov_fname', 'fnames', 'html', 'include',
+                 'image_format', 'info_fname', 'initial_id', 'raw_psd',
+                 '_sectionlabels', 'sections', '_sectionvars',
+                 '_sort_sections', 'subjects_dir', 'subject', 'title',
+                 'verbose'],
+                ['data_path', '_sort'])
+
     def __getstate__(self):
         """Get the state of the report as a dictionary."""
-        # Note: self._fname is not part of the state
-        state = dict(
-            baseline=self.baseline,
-            cov_fname=self.cov_fname,
-            fnames=self.fnames,
-            html=self.html,
-            include=self.include,
-            image_format=self.image_format,
-            info_fname=self.info_fname,
-            initial_id=self.initial_id,
-            raw_psd=self.raw_psd,
-            _sectionlabels=self._sectionlabels,
-            sections=self.sections,
-            _sectionvars=self._sectionvars,
-            _sort_sections=self._sort_sections,
-            subjects_dir=self.subjects_dir,
-            subject=self.subject,
-            title=self.title,
-            verbose=self.verbose,
-        )
-        if hasattr(self, 'data_path'):
-            state['data_path'] = self.data_path
-        if hasattr(self, '_sort'):
-            state['_sort'] = self._sort
+        state = dict()
+        non_opt_params, opt_params = self._get_state_params()
+        for param in non_opt_params:
+            state[param] = getattr(self, param)
+        for param in opt_params:
+            if hasattr(self, param):
+                state[param] = getattr(self, param)
         return state
 
     def __setstate__(self, state):
         """Set the state of the report."""
-        # Note: self._fname is not part of the state
-        self.baseline = state['baseline']
-        self.cov_fname = state['cov_fname']
-        self.fnames = state['fnames']
-        self.html = state['html']
-        self.include = state['include']
-        self.image_format = state['image_format']
-        self.info_fname = state['info_fname']
-        self.initial_id = state['initial_id']
-        self.raw_psd = state['raw_psd']
-        self._sectionlabels = state['_sectionlabels']
-        self.sections = state['sections']
-        self._sectionvars = state['_sectionvars']
-        self._sort_sections = state['_sort_sections']
-        self.subjects_dir = state['subjects_dir']
-        self.subject = state['subject']
-        self.title = state['title']
-        self.verbose = state['verbose']
-        if 'data_path' in state:
-            self.data_path = state['data_path']
-        if '_sort' in state:
-            self._sort = state['_sort']
+        non_opt_params, opt_params = self._get_state_params()
+        for param in non_opt_params:
+            setattr(self, param, state[param])
+        for param in opt_params:
+            if param in state:
+                setattr(self, param, state[param])
+        return state
 
     def save(self, fname=None, open_browser=True, overwrite=False):
         """Save the report and optionally open it in browser.
