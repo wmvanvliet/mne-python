@@ -949,8 +949,22 @@ class Report(object):
 
         return items, captions, comments
 
+    def _add_or_replace(self, fname, sectionlabel, html, replace=False):
+        if replace and fname in self.fnames:
+            # Remove existing record
+            ind = self.fnames.rindex(fname)  # Replace last occurence
+            self.fnames[ind] = fname
+            self._sectionlabels[ind] = sectionlabel
+            self.html[ind] = html
+        else:
+            # Append new record
+            self.fnames.append(fname)
+            self._sectionlabels.append(sectionlabel)
+            self.html.append(html)
+
     def _add_figs_to_section(self, figs, captions, section='custom',
-                             image_format='png', scale=None, comments=None):
+                             image_format='png', scale=None, comments=None,
+                             replace=False):
         """Auxiliary method for `add_section` and `add_figs_to_section`."""
         figs, captions, comments = self._validate_input(figs, captions,
                                                         section, comments)
@@ -970,9 +984,8 @@ class Report(object):
                                              show=True,
                                              image_format=image_format,
                                              comment=comment)
-            self.fnames.append('%s-#-%s-#-custom' % (caption, sectionvar))
-            self._sectionlabels.append(sectionvar)
-            self.html.append(html)
+            self._add_or_replace('%s-#-%s-#-custom' % (caption, sectionvar),
+                                 sectionvar, html, replace)
 
     def add_figs_to_section(self, figs, captions, section='custom',
                             scale=None, image_format=None, comments=None):
@@ -980,15 +993,15 @@ class Report(object):
 
         Parameters
         ----------
-        figs : list of figures.
-            Each figure in the list can be an instance of
-            :class:`matplotlib.figure.Figure`,
+        figs : figure | list of figures
+            A figure or a list of figures to add to the report. Each figure in
+            the list can be an instance of :class:`matplotlib.figure.Figure`,
             :class:`mayavi.core.api.Scene`, or :class:`numpy.ndarray`.
-        captions : list of str
-            A list of captions to the figures.
+        captions : str | list of str
+            A caption or a list of captions to the figures.
         section : str
-            Name of the section. If section already exists, the figures
-            will be appended to the end of the section
+            Name of the section to place the figure in. If section already
+            exists, the figures will be appended to the end of the section.
         scale : float | None | callable
             Scale the images maintaining the aspect ratio.
             If None, no scaling is applied. If float, scale will determine
@@ -1002,6 +1015,9 @@ class Report(object):
         comments : None | str | list of str
             A string of text or a list of strings of text to be appended after
             the figure.
+        replace : bool
+            Controls whether to replace figures in the report with the same
+            caption. Defaults to ``False``.
         """
         image_format = _check_image_format(self, image_format)
         return self._add_figs_to_section(figs=figs, captions=captions,
@@ -1010,7 +1026,7 @@ class Report(object):
                                          comments=comments)
 
     def add_images_to_section(self, fnames, captions, scale=None,
-                              section='custom', comments=None):
+                              section='custom', comments=None, replace=False):
         """Append custom user-defined images.
 
         Parameters
@@ -1029,6 +1045,9 @@ class Report(object):
         comments : None | str | list of str
             A string of text or a list of strings of text to be appended after
             the image.
+        replace : bool
+            Controls whether to replace images in the report with the same
+            caption. Defaults to ``False``.
         """
         # Note: using scipy.misc is equivalent because scipy internally
         # imports PIL anyway. It's not possible to redirect image output
@@ -1062,11 +1081,12 @@ class Report(object):
                                              width=scale,
                                              comment=comment,
                                              show=True)
-            self.fnames.append('%s-#-%s-#-custom' % (caption, sectionvar))
-            self._sectionlabels.append(sectionvar)
-            self.html.append(html)
 
-    def add_htmls_to_section(self, htmls, captions, section='custom'):
+            self._add_or_replace('%s-#-%s-#-custom' % (caption, sectionvar),
+                                 sectionvar, html, replace)
+
+    def add_htmls_to_section(self, htmls, captions, section='custom',
+                             replace=False):
         """Append htmls to the report.
 
         Parameters
@@ -1078,6 +1098,9 @@ class Report(object):
         section : str
             Name of the section. If section already exists, the images
             will be appended to the end of the section.
+        replace : bool
+            Controls whether to replace html string in the report with the same
+            caption. Defaults to ``False``.
 
         Notes
         -----
@@ -1090,14 +1113,14 @@ class Report(object):
             global_id = self._get_id()
             div_klass = self._sectionvars[section]
 
-            self.fnames.append('%s-#-%s-#-custom' % (caption, sectionvar))
-            self._sectionlabels.append(sectionvar)
-            self.html.append(
+            self._add_or_replace(
+                '%s-#-%s-#-custom' % (caption, sectionvar), sectionvar,
                 html_template.substitute(div_klass=div_klass, id=global_id,
-                                         caption=caption, html=html))
+                                         caption=caption, html=html), replace)
 
     def add_bem_to_section(self, subject, caption='BEM', section='bem',
-                           decim=2, n_jobs=1, subjects_dir=None):
+                           decim=2, n_jobs=1, subjects_dir=None,
+                           replace=False):
         """Render a bem slider html str.
 
         Parameters
@@ -1117,6 +1140,9 @@ class Report(object):
         subjects_dir : str | None
             Path to the SUBJECTS_DIR. If None, the path is obtained by using
             the environment variable SUBJECTS_DIR.
+        replace : bool
+            Controls whether to replace bem sliders in the report with the same
+            caption. Defaults to ``False``.
 
         Notes
         -----
@@ -1128,13 +1154,12 @@ class Report(object):
                                 caption=caption)
         html, caption, _ = self._validate_input(html, caption, section)
         sectionvar = self._sectionvars[section]
-
-        self.fnames.append('%s-#-%s-#-custom' % (caption[0], sectionvar))
-        self._sectionlabels.append(sectionvar)
-        self.html.extend(html)
+        self._add_or_replace('%s-#-%s-#-custom' % (caption[0], sectionvar),
+                             sectionvar, html)
 
     def add_slider_to_section(self, figs, captions=None, section='custom',
-                              title='Slider', scale=None, image_format=None):
+                              title='Slider', scale=None, image_format=None,
+                              replace=False):
         """Render a slider of figs to the report.
 
         Parameters
@@ -1163,6 +1188,9 @@ class Report(object):
             The image format to be used for the report, can be 'png' or 'svd'.
             None (default) will use the default specified during Report
             class construction.
+        replace : bool
+            Controls whether to replace sliders in the report with the same
+            caption. Defaults to ``False``.
 
         Notes
         -----
@@ -1181,7 +1209,6 @@ class Report(object):
         figs = figs[0]
 
         sectionvar = self._sectionvars[section]
-        self._sectionlabels.append(sectionvar)
         global_id = self._get_id()
         img_klass = self._sectionvars[section]
         name = 'slider'
@@ -1221,13 +1248,13 @@ class Report(object):
         html = '\n'.join(html)
 
         slider_klass = sectionvar
-        self.html.append(
+
+        self._add_or_replace(
+            '%s-#-%s-#-custom' % (section, sectionvar), sectionvar,
             slider_full_template.substitute(id=global_id, title=title,
                                             div_klass=slider_klass,
                                             slider_id=slider_id, html=html,
                                             image_html=image_html))
-
-        self.fnames.append('%s-#-%s-#-custom' % (section, sectionvar))
 
     ###########################################################################
     # HTML rendering
