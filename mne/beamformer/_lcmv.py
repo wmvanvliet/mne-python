@@ -27,7 +27,8 @@ from ._compute_beamformer import (
 @verbose
 def make_lcmv(info, forward, data_cov, reg=0.05, noise_cov=None, label=None,
               pick_ori=None, rank='info', weight_norm='unit-noise-gain',
-              reduce_rank=False, depth=None, verbose=None):
+              reduce_rank=False, depth=None, recipsiicos=False, power_rank=None,
+              verbose=None):
     """Compute LCMV spatial filter.
 
     Parameters
@@ -71,6 +72,9 @@ def make_lcmv(info, forward, data_cov, reg=0.05, noise_cov=None, label=None,
     %(depth)s
 
         .. versionadded:: 0.18
+    recipsiicos : None | int
+        Power rank to use for ReciPSIICOS preprocessing of the covariance
+        matrix. Defaults the `None`, which means not to use ReciPSIICOS at all.
     %(verbose)s
 
     Returns
@@ -154,6 +158,36 @@ def make_lcmv(info, forward, data_cov, reg=0.05, noise_cov=None, label=None,
     Cm = data_cov._get_square()
     if 'estimator' in data_cov:
         del data_cov['estimator']
+
+    if recipsiicos is not None:
+        if pick_ori != 'normal':
+            raise NotImplementedError('ReciPSIICOS currently only implemented '
+                                      'for pick_ori="normal".')
+        n_channels = len(Cm)
+        n_sources = G.shape[1]
+
+        A = np.zeros((n_channels ** 2, n_sources))
+        for i in range(n_sources):
+            gi = G[:, i]
+            v = np.outer(gi, gi).ravel()
+            A[:, i] = v
+        A /= np.linalg.norm(A, axis=0, keepdims=True)
+
+        AA = A.dot(A.T)
+        print(f'Finding eigen space of {AA.shape}...')
+        s, u = linalg.eigh(AA, subset_by_index=(len(AA)-recipsiicos, len(AA)-1), driver='evx')
+        order = np.argsort(s)[::-1]
+        s = s[order]
+        print(s)
+        u = u[:, order]
+        print(u.shape)
+
+        # Upwr = ProjectorOnlyAwayFromPowerComplete(G2d0U, PwrRnk);
+        Cm = u.dot(u.T).dot(Cm.flat).reshape(Cm.shape)
+        Cm_s, Cm_u = np.linalg.eig(Cm)
+        Cm = (Cm_u * abs(Cm_s)).dot(Cm_u.T)  # fix negative eigenvalues
+
+        print(Cm.shape)
 
     # Whiten the data covariance
     Cm = np.dot(whitener, np.dot(Cm, whitener.T))
