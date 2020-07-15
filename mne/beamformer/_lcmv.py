@@ -166,6 +166,7 @@ def make_lcmv(info, forward, data_cov, reg=0.05, noise_cov=None, label=None,
         n_channels = len(Cm)
         n_sources = G.shape[1]
 
+        print('Computing ReciPSIICOS whitener...', end='', flush=True)
         A = np.zeros((n_channels ** 2, n_sources))
         for i in range(n_sources):
             gi = G[:, i]
@@ -173,17 +174,42 @@ def make_lcmv(info, forward, data_cov, reg=0.05, noise_cov=None, label=None,
             A[:, i] = v
         A /= np.linalg.norm(A, axis=0, keepdims=True)
 
-        AA = A.dot(A.T)
-        print(f'Finding eigen space of {AA.shape}...')
-        s, u = linalg.eigh(AA, subset_by_index=(len(AA)-recipsiicos, len(AA)-1), driver='evx')
+        P = A.dot(A.T)
+        tr = np.trace(P) / len(P)
+        P += 0.01 * tr * np.eye(len(P))
+        Wps = linalg.sqrtm(linalg.inv(P))
+        print('done.')
+
+        print('Computing C_re...', end='', flush=True)
+        corr_subspace = np.zeros((n_channels ** 2, n_channels ** 2))
+        from tqdm import tqdm
+        for i in tqdm(range(n_sources)):
+            gi = G[:, i]
+            X = np.zeros((n_channels ** 2, n_sources - i - 1))
+            k = 0
+            for j in range(i + 1, n_sources):
+                gj = G[:, j]
+                X[:, k] = np.outer(gi, gj).ravel()
+                k += 1
+            corr_subspace += X @ X.T
+        print('done')
+        print(corr_subspace.shape)
+
+        print('Computing ReciPSIICOS covariance projection...', end='', flush=True)
+        corr_subspace = Wps @ corr_subspace @ Wps.T
+        s, u = linalg.eigh(corr_subspace, subset_by_index=(len(corr_subspace)-recipsiicos, len(corr_subspace)-1))
         order = np.argsort(s)[::-1]
         s = s[order]
-        print(s)
         u = u[:, order]
         print(u.shape)
 
-        # Upwr = ProjectorOnlyAwayFromPowerComplete(G2d0U, PwrRnk);
-        Cm = u.dot(u.T).dot(Cm.flat).reshape(Cm.shape)
+        Wps_inv = linalg.inv(Wps + 0.05 * np.trace(Wps)/len(Wps))
+        I = np.eye(len(corr_subspace))
+        P = Wps_inv @ (I - u @ u.T) @ Wps
+        print(P.shape)
+        print('done')
+
+        Cm = P.dot(Cm.flat).reshape(Cm.shape)
         Cm_s, Cm_u = np.linalg.eig(Cm)
         Cm = (Cm_u * abs(Cm_s)).dot(Cm_u.T)  # fix negative eigenvalues
 
