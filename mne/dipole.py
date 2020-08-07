@@ -1489,7 +1489,7 @@ def _concatenate_dipoles(dipoles):
 
 
 @verbose
-def project_dipole(dip, evoked, cov, bem, trans=None, free_ori=False,
+def project_dipole(dip, epochs, cov, bem, trans=None, free_ori=False,
                    rank=None, verbose=None):
     """Project sensor data onto a dipole to estimate the source timecourse.
 
@@ -1497,7 +1497,7 @@ def project_dipole(dip, evoked, cov, bem, trans=None, free_ori=False,
     ----------
     dip : instance of Dipole | instance of DipoleFixed
         The source dipole to project the sensor data onto.
-    evoked : instance of Evoked
+    epochs : instance of Epochs
         The sensor data to project onto the dipole.
     cov : str | instance of Covariance
         The noise covariance.
@@ -1526,15 +1526,15 @@ def project_dipole(dip, evoked, cov, bem, trans=None, free_ori=False,
     read_dipole
     """
     # Determine if a list of projectors has an average EEG ref
-    if _needs_eeg_average_ref_proj(evoked.info):
+    if _needs_eeg_average_ref_proj(epochs.info):
         raise ValueError('EEG average reference is mandatory for dipole '
                          'fitting.')
 
-    data = evoked.data
+    data = epochs.get_data()
     if not np.isfinite(data).all():
         raise ValueError('Evoked data must be finite')
-    info = evoked.info
-    times = evoked.times.copy()
+    info = epochs.info
+    times = epochs.times.copy()
 
     # Figure out our inputs
     neeg = len(pick_types(info, meg=False, eeg=True, ref_meg=False,
@@ -1582,14 +1582,14 @@ def project_dipole(dip, evoked, cov, bem, trans=None, free_ori=False,
         del R, r0
     accurate = False  # can be an option later (shouldn't make big diff)
 
-    pos = dip.pos[0]
+    pos = dip.pos[0].astype(np.float)
     logger.info('Dipole position    : %6.1f %6.1f %6.1f mm'
                 % tuple(1000 * pos))
 
     if free_ori:
         logger.info('Free orientation   : <time-varying>')
     else:
-        ori = dip.ori[0]
+        ori = dip.ori[0].astype(np.float)
         logger.info('Dipole orientation  : %6.4f %6.4f %6.4f mm'
                     % tuple(ori))
 
@@ -1603,7 +1603,7 @@ def project_dipole(dip, evoked, cov, bem, trans=None, free_ori=False,
     logger.info('%d bad channels total' % len(info['bads']))
 
     # Forward model setup (setup_forward_model from setup.c)
-    ch_types = evoked.get_channel_types()
+    ch_types = epochs.get_channel_types()
 
     megcoils, compcoils, megnames, meg_info = [], [], [], None
     eegels, eegnames = [], []
@@ -1665,36 +1665,18 @@ def project_dipole(dip, evoked, cov, bem, trans=None, free_ori=False,
                                         _pl(guess_src['nuse'])))
 
     # Do actual fits
-    data = data[picks]
-    ch_names = [info['ch_names'][p] for p in picks]
-    out = _fit_dipoles(
-        _fit_dipole_fixed, 0, data, times, guess_src['rr'], guess_data,
-        fwd_data, whitener, ori, 1, rank)
-    assert len(out) == 8
-
-    data = np.array([out[1], out[3]])
-    out_info = deepcopy(info)
-    loc = np.concatenate([pos, ori, np.zeros(6)])
-    out_info['chs'] = [
-        dict(ch_name='dip 01', loc=loc, kind=FIFF.FIFFV_DIPOLE_WAVE,
-             coord_frame=FIFF.FIFFV_COORD_UNKNOWN, unit=FIFF.FIFF_UNIT_AM,
-             coil_type=FIFF.FIFFV_COIL_DIPOLE,
-             unit_mul=0, range=1, cal=1., scanno=1, logno=1),
-        dict(ch_name='goodness', loc=np.full(12, np.nan),
-             kind=FIFF.FIFFV_GOODNESS_FIT, unit=FIFF.FIFF_UNIT_AM,
-             coord_frame=FIFF.FIFFV_COORD_UNKNOWN,
-             coil_type=FIFF.FIFFV_COIL_NONE,
-             unit_mul=0, range=1., cal=1., scanno=2, logno=100)]
-    for key in ['hpi_meas', 'hpi_results', 'projs']:
-        out_info[key] = list()
-    for key in ['acq_pars', 'acq_stim', 'description', 'dig',
-                'experimenter', 'hpi_subsystem', 'proj_id', 'proj_name',
-                'subject_info']:
-        out_info[key] = None
-    out_info['bads'] = []
-    out_info._update_redundant()
-    out_info._check_consistency()
-    dipoles = DipoleFixed(out_info, data, times, evoked.nave,
-                          evoked._aspect_kind, comment=evoked.comment)
-    logger.info('%d time points fitted' % len(dipoles.times))
-    return dipoles
+    data = data[:, picks]
+    parallel, p_fun, _ = parallel_func(_fit_dipoles, n_jobs=4)
+    timecourses = parallel(p_fun(_fit_dipole_fixed, 0, d, times,
+                                 guess_src['rr'], guess_data, fwd_data,
+                                 whitener, ori, 1, rank)
+                           for d in data)
+    #for d in data:
+    #    out = _fit_dipoles(
+    #        _fit_dipole_fixed, 0, d, times, guess_src['rr'], guess_data,
+    #        fwd_data, whitener, ori, 1, rank)
+    #    assert len(out) == 8
+    #    timecourses.append(out[1])
+    #    print(out[1].shape)
+    timecourses = [out[1] for out in timecourses]
+    return np.array(timecourses)
