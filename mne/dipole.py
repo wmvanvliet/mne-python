@@ -1486,3 +1486,215 @@ def _concatenate_dipoles(dipoles):
     return Dipole(np.concatenate(times), np.concatenate(pos),
                   np.concatenate(amplitude), np.concatenate(ori),
                   np.concatenate(gof), name=None)
+
+
+@verbose
+def project_dipole(dip, evoked, cov, bem, trans=None, free_ori=False,
+                   rank=None, verbose=None):
+    """Project sensor data onto a dipole to estimate the source timecourse.
+
+    Parameters
+    ----------
+    dip : instance of Dipole | instance of DipoleFixed
+        The source dipole to project the sensor data onto.
+    evoked : instance of Evoked
+        The sensor data to project onto the dipole.
+    cov : str | instance of Covariance
+        The noise covariance.
+    bem : str | instance of ConductorModel
+        The BEM filename (str) or conductor model.
+    trans : str | None
+        The head<->MRI transform filename. Must be provided unless BEM
+        is a sphere model.
+    free_ori : bool
+        Whether to allow the orientation of the dipole to change over time to
+        optimize the goodness of fit, or should remain fixed. Defaults to
+        False.
+    %(rank_None)s
+    %(verbose)s
+
+    Returns
+    -------
+    source_timecourse : ndarray, shape (n_times,)
+        The source timecourse.
+
+    See Also
+    --------
+    Dipole
+    DipoleFixed
+    fit_dipole
+    read_dipole
+    """
+    # Determine if a list of projectors has an average EEG ref
+    if _needs_eeg_average_ref_proj(evoked.info):
+        raise ValueError('EEG average reference is mandatory for dipole '
+                         'fitting.')
+
+    data = evoked.data
+    if not np.isfinite(data).all():
+        raise ValueError('Evoked data must be finite')
+    info = evoked.info
+    times = evoked.times.copy()
+
+    # Figure out our inputs
+    neeg = len(pick_types(info, meg=False, eeg=True, ref_meg=False,
+                          exclude=[]))
+    if isinstance(bem, str):
+        bem_extra = bem
+    else:
+        bem_extra = repr(bem)
+        logger.info('BEM               : %s' % bem_extra)
+    mri_head_t, trans = _get_trans(trans)
+    logger.info('MRI transform     : %s' % trans)
+    bem = _setup_bem(bem, bem_extra, neeg, mri_head_t, verbose=False)
+    if not bem['is_sphere']:
+        # Find the best-fitting sphere
+        inner_skull = _bem_find_surface(bem, 'inner_skull')
+        inner_skull = inner_skull.copy()
+        R, r0 = _fit_sphere(inner_skull['rr'], disp=False)
+        # r0 back to head frame for logging
+        r0 = apply_trans(mri_head_t['trans'], r0[np.newaxis, :])[0]
+        inner_skull['r0'] = r0
+        logger.info('Head origin       : '
+                    '%6.1f %6.1f %6.1f mm rad = %6.1f mm.'
+                    % (1000 * r0[0], 1000 * r0[1], 1000 * r0[2], 1000 * R))
+        del R, r0
+    else:
+        r0 = bem['r0']
+        if len(bem.get('layers', [])) > 0:
+            R = bem['layers'][0]['rad']
+            kind = 'rad'
+        else:  # MEG-only
+            # Use the minimum distance to the MEG sensors as the radius then
+            R = np.dot(linalg.inv(info['dev_head_t']['trans']),
+                       np.hstack([r0, [1.]]))[:3]  # r0 -> device
+            R = R - [info['chs'][pick]['loc'][:3]
+                     for pick in pick_types(info, meg=True, exclude=[])]
+            if len(R) == 0:
+                raise RuntimeError('No MEG channels found, but MEG-only '
+                                   'sphere model used')
+            R = np.min(np.sqrt(np.sum(R * R, axis=1)))  # use dist to sensors
+            kind = 'max_rad'
+        logger.info('Sphere model      : origin at (% 7.2f % 7.2f % 7.2f) mm, '
+                    '%s = %6.1f mm'
+                    % (1000 * r0[0], 1000 * r0[1], 1000 * r0[2], kind, R))
+        inner_skull = dict(R=R, r0=r0)  # NB sphere model defined in head frame
+        del R, r0
+    accurate = False  # can be an option later (shouldn't make big diff)
+
+    pos = dip.pos[0]
+    logger.info('Dipole position    : %6.1f %6.1f %6.1f mm'
+                % tuple(1000 * pos))
+
+    if free_ori:
+        logger.info('Free orientation   : <time-varying>')
+    else:
+        ori = dip.ori[0]
+        logger.info('Dipole orientation  : %6.4f %6.4f %6.4f mm'
+                    % tuple(ori))
+
+    if isinstance(cov, str):
+        logger.info('Noise covariance  : %s' % (cov,))
+        cov = read_cov(cov, verbose=False)
+    logger.info('')
+
+    _print_coord_trans(mri_head_t)
+    _print_coord_trans(info['dev_head_t'])
+    logger.info('%d bad channels total' % len(info['bads']))
+
+    # Forward model setup (setup_forward_model from setup.c)
+    ch_types = evoked.get_channel_types()
+
+    megcoils, compcoils, megnames, meg_info = [], [], [], None
+    eegels, eegnames = [], []
+    if 'grad' in ch_types or 'mag' in ch_types:
+        megcoils, compcoils, megnames, meg_info = \
+            _prep_meg_channels(info, exclude='bads',
+                               accurate=accurate, verbose=verbose)
+    if 'eeg' in ch_types:
+        eegels, eegnames = _prep_eeg_channels(info, exclude='bads',
+                                              verbose=verbose)
+
+    # Ensure that MEG and/or EEG channels are present
+    if len(megcoils + eegels) == 0:
+        raise RuntimeError('No MEG or EEG channels found.')
+
+    # Whitener for the data
+    logger.info('Decomposing the sensor noise covariance matrix...')
+    picks = pick_types(info, meg=True, eeg=True, ref_meg=False)
+
+    # In case we want to more closely match MNE-C for debugging:
+    # from .io.pick import pick_info
+    # from .cov import prepare_noise_cov
+    # info_nb = pick_info(info, picks)
+    # cov = prepare_noise_cov(cov, info_nb, info_nb['ch_names'], verbose=False)
+    # nzero = (cov['eig'] > 0)
+    # n_chan = len(info_nb['ch_names'])
+    # whitener = np.zeros((n_chan, n_chan), dtype=np.float64)
+    # whitener[nzero, nzero] = 1.0 / np.sqrt(cov['eig'][nzero])
+    # whitener = np.dot(whitener, cov['eigvec'])
+
+    whitener, _, rank = compute_whitener(cov, info, picks=picks,
+                                         rank=rank, return_rank=True)
+
+    # Proceed to computing the fits
+    guess_src = dict(nuse=1, rr=pos[np.newaxis], inuse=np.array([True]))
+    logger.info('Compute forward for dipole location...')
+
+    # inner_skull goes from mri to head frame
+    if 'rr' in inner_skull:
+        transform_surface_to(inner_skull, 'head', mri_head_t)
+
+    # C code computes guesses w/sphere model for speed, don't bother here
+    fwd_data = dict(coils_list=[megcoils, eegels], infos=[meg_info, None],
+                    ccoils_list=[compcoils, None], coil_types=['meg', 'eeg'],
+                    inner_skull=inner_skull)
+    # fwd_data['inner_skull'] in head frame, bem in mri, confusing...
+    _prep_field_computation(guess_src['rr'], bem, fwd_data, n_jobs=1,
+                            verbose=False)
+    guess_fwd, guess_fwd_orig, guess_fwd_scales = _dipole_forwards(
+        fwd_data, whitener, guess_src['rr'], n_jobs=1)
+    # decompose ahead of time
+    guess_fwd_svd = [linalg.svd(fwd, overwrite_a=False, full_matrices=False)
+                     for fwd in np.array_split(guess_fwd,
+                                               len(guess_src['rr']))]
+    guess_data = dict(fwd=guess_fwd, fwd_svd=guess_fwd_svd,
+                      fwd_orig=guess_fwd_orig, scales=guess_fwd_scales)
+    del guess_fwd, guess_fwd_svd, guess_fwd_orig, guess_fwd_scales  # destroyed
+    logger.info('[done %d source%s]' % (guess_src['nuse'],
+                                        _pl(guess_src['nuse'])))
+
+    # Do actual fits
+    data = data[picks]
+    ch_names = [info['ch_names'][p] for p in picks]
+    out = _fit_dipoles(
+        _fit_dipole_fixed, 0, data, times, guess_src['rr'], guess_data,
+        fwd_data, whitener, ori, 1, rank)
+    assert len(out) == 8
+
+    data = np.array([out[1], out[3]])
+    out_info = deepcopy(info)
+    loc = np.concatenate([pos, ori, np.zeros(6)])
+    out_info['chs'] = [
+        dict(ch_name='dip 01', loc=loc, kind=FIFF.FIFFV_DIPOLE_WAVE,
+             coord_frame=FIFF.FIFFV_COORD_UNKNOWN, unit=FIFF.FIFF_UNIT_AM,
+             coil_type=FIFF.FIFFV_COIL_DIPOLE,
+             unit_mul=0, range=1, cal=1., scanno=1, logno=1),
+        dict(ch_name='goodness', loc=np.full(12, np.nan),
+             kind=FIFF.FIFFV_GOODNESS_FIT, unit=FIFF.FIFF_UNIT_AM,
+             coord_frame=FIFF.FIFFV_COORD_UNKNOWN,
+             coil_type=FIFF.FIFFV_COIL_NONE,
+             unit_mul=0, range=1., cal=1., scanno=2, logno=100)]
+    for key in ['hpi_meas', 'hpi_results', 'projs']:
+        out_info[key] = list()
+    for key in ['acq_pars', 'acq_stim', 'description', 'dig',
+                'experimenter', 'hpi_subsystem', 'proj_id', 'proj_name',
+                'subject_info']:
+        out_info[key] = None
+    out_info['bads'] = []
+    out_info._update_redundant()
+    out_info._check_consistency()
+    dipoles = DipoleFixed(out_info, data, times, evoked.nave,
+                          evoked._aspect_kind, comment=evoked.comment)
+    logger.info('%d time points fitted' % len(dipoles.times))
+    return dipoles
