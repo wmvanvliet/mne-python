@@ -22,7 +22,7 @@ import mne
 from mne import (Epochs, Annotations, read_events, pick_events, read_epochs,
                  equalize_channels, pick_types, pick_channels, read_evokeds,
                  write_evokeds, create_info, make_fixed_length_events,
-                 combine_evoked)
+                 make_fixed_length_epochs, combine_evoked)
 from mne.baseline import rescale
 from mne.fixes import rfft, rfftfreq
 from mne.preprocessing import maxwell_filter
@@ -1792,10 +1792,10 @@ def test_access_by_name(tmpdir):
     pytest.raises(ValueError, Epochs, raw, events, event_id_illegal,
                   tmin, tmax)
     # Test on_missing
-    pytest.raises(ValueError, Epochs, raw, events, 1, tmin, tmax,
-                  on_missing='foo')
+    pytest.raises(ValueError, Epochs, raw, events, event_id_illegal, tmin,
+                  tmax, on_missing='foo')
     with pytest.warns(RuntimeWarning, match='No matching events'):
-        Epochs(raw, events, event_id_illegal, tmin, tmax, on_missing='warning')
+        Epochs(raw, events, event_id_illegal, tmin, tmax, on_missing='warn')
     Epochs(raw, events, event_id_illegal, tmin, tmax, on_missing='ignore')
 
     # Test constructing epochs with a list of ints as events
@@ -2420,7 +2420,7 @@ def test_concatenate_epochs():
     assert_equal(epochs_conc.drop_log, epochs.drop_log * 2)
 
     epochs2 = epochs.copy().load_data()
-    with pytest.raises(ValueError, match='nchan.*must match'):
+    with pytest.raises(ValueError, match=r"epochs\[1\].info\['nchan'\] must"):
         concatenate_epochs(
             [epochs, epochs2.copy().drop_channels(epochs2.ch_names[:1])])
 
@@ -3001,6 +3001,37 @@ def test_epochs_get_data_item(preload):
     one_data = epochs.get_data(item=0)
     one_epo = epochs[0]
     assert_array_equal(one_data, one_epo.get_data())
+
+
+def test_pick_types_reject_flat_keys():
+    """Test that epochs.pick_types removes keys from reject/flat."""
+    raw, events, _ = _get_data()
+    event_id = {'a/1': 1, 'a/2': 2, 'b/1': 3, 'b/2': 4}
+    picks = pick_types(raw.info, meg=True, eeg=True, ecg=True, eog=True)
+    epochs = Epochs(raw, events, event_id, preload=True, picks=picks,
+                    reject=dict(grad=1e-10, mag=1e-10, eeg=1e-3, eog=1e-3),
+                    flat=dict(grad=1e-16, mag=1e-16, eeg=1e-16, eog=1e-16))
+
+    assert sorted(epochs.reject.keys()) == ['eeg', 'eog', 'grad', 'mag']
+    assert sorted(epochs.flat.keys()) == ['eeg', 'eog', 'grad', 'mag']
+    epochs.pick_types(meg=True, eeg=False, ecg=False, eog=False)
+    assert sorted(epochs.reject.keys()) == ['grad', 'mag']
+    assert sorted(epochs.flat.keys()) == ['grad', 'mag']
+
+
+@testing.requires_testing_data
+def test_make_fixed_length_epochs():
+    """Test dividing raw data into equal-sized consecutive epochs."""
+    raw = read_raw_fif(raw_fname, preload=True)
+    epochs = make_fixed_length_epochs(raw, duration=1, preload=True)
+    # Test Raw with annotations
+    annot = Annotations(onset=[0], duration=[5], description=['BAD'])
+    raw_annot = raw.set_annotations(annot)
+    epochs_annot = make_fixed_length_epochs(raw_annot, duration=1.0,
+                                            preload=True)
+    assert len(epochs) > 10
+    assert len(epochs_annot) > 10
+    assert len(epochs) > len(epochs_annot)
 
 
 run_tests_if_main()

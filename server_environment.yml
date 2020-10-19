@@ -9,16 +9,16 @@ dependencies:
 - mesalib
 - ffmpeg
 - vtk
-- numpy
-- scipy
 - traits
 - pip:
   - mne
+  - scipy
+  - numpy<1.19.0
   - matplotlib
   - ipympl
   - jupyter
-  - pyvista==0.24
+  - pyvista
   - ipywidgets
   - nbformat
   - nbclient
-  - jupyter_client<6.1.5
+  - jupyter_client!=6.1.5

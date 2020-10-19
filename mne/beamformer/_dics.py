@@ -9,7 +9,7 @@
 import numpy as np
 
 from ..channels import equalize_channels
-from ..utils import (logger, verbose, warn,
+from ..utils import (logger, verbose, warn, _check_one_ch_type,
                      _check_channels_spatial_filter, _check_rank,
                      _check_option, _validate_type)
 from ..forward import _subject_from_forward
@@ -23,9 +23,9 @@ from ._compute_beamformer import (_check_proj_match, _prepare_beamformer_input,
 
 @verbose
 def make_dics(info, forward, csd, reg=0.05, noise_csd=None, label=None,
-              pick_ori=None, rank=None, inversion='single', weight_norm=None,
-              depth=1., real_filter=False, reduce_rank=False,
-              verbose=None, normalize_fwd=None):
+              pick_ori=None, rank=None, weight_norm=None,
+              reduce_rank=False, depth=1., real_filter=False,
+              inversion='matrix', verbose=None):
     """Compute a Dynamic Imaging of Coherent Sources (DICS) spatial filter.
 
     This is a beamformer filter that can be used to estimate the source power
@@ -61,29 +61,21 @@ def make_dics(info, forward, csd, reg=0.05, noise_csd=None, label=None,
     label : Label | None
         Restricts the solution to a given label.
     %(bf_pick_ori)s
-    rank : None | int | 'full'
-        This controls the effective rank of the covariance matrix when
-        computing the inverse. The rank can be set explicitly by specifying an
-        integer value. If ``None``, the rank will be automatically estimated.
-        Since applying regularization will always make the covariance matrix
-        full rank, the rank is estimated before regularization in this case. If
-        'full', the rank will be estimated after regularization and hence
-        will mean using the full rank, unless ``reg=0`` is used.
-        The default is None.
+    %(rank_None)s
 
         .. versionadded:: 0.17
-    %(bf_inversion)s
-        Defaults to ``'single'``.
     %(weight_norm)s
 
         Defaults to ``None``, in which case no normalization is performed.
+    %(reduce_rank)s
     %(depth)s
     real_filter : bool
         If ``True``, take only the real part of the cross-spectral-density
         matrices to compute real filters. Defaults to ``False``.
-    %(reduce_rank)s
-    normalize_fwd : bool
-        Deprecated, use ``depth`` instead.
+    %(bf_inversion)s
+
+        .. versionchanged:: 0.21
+           Default changed to ``'matrix'``.
     %(verbose)s
 
     Returns
@@ -151,11 +143,11 @@ def make_dics(info, forward, csd, reg=0.05, noise_csd=None, label=None,
     The default setting reproduce the DICS beamformer as described in
     :footcite:`vanVlietEtAl2018`::
 
-        inversion='single', weight_norm=None, normalize_fwd=True
+        inversion='single', weight_norm=None, depth=1.
 
     To use the :func:`make_lcmv` defaults, use::
 
-        inversion='matrix', weight_norm='unit-noise-gain', normalize_fwd=False
+        inversion='matrix', weight_norm='unit-noise-gain-invariant', depth=None
 
     For more information about ``real_filter``, see the
     supplemental information from :footcite:`HippEtAl2011`.
@@ -164,10 +156,6 @@ def make_dics(info, forward, csd, reg=0.05, noise_csd=None, label=None,
     ----------
     .. footbibliography::
     """  # noqa: E501
-    if normalize_fwd is not None:
-        warn('normalize_fwd is deprecated and will be removed in 0.22, use '
-             'depth instead', DeprecationWarning)
-        depth = 1. if normalize_fwd else 0.
     rank = _check_rank(rank)
     _check_option('pick_ori', pick_ori, [None, 'normal', 'max-power'])
     _check_option('inversion', inversion, ['single', 'matrix'])
@@ -176,6 +164,7 @@ def make_dics(info, forward, csd, reg=0.05, noise_csd=None, label=None,
     frequencies = [np.mean(freq_bin) for freq_bin in csd.frequencies]
     n_freqs = len(frequencies)
 
+    _check_one_ch_type('dics', info, forward, csd, noise_csd)
     info, fwd, csd = equalize_channels([info, forward, csd])
 
     csd, noise_csd = _prepare_noise_csd(csd, noise_csd, real_filter)
@@ -489,7 +478,7 @@ def tf_dics(epochs, forward, noise_csds, tmin, tmax, tstep, win_lengths,
             mt_adaptive=False, mt_low_bias=True, cwt_n_cycles=7, decim=1,
             reg=0.05, label=None, pick_ori=None, rank=None, inversion='single',
             weight_norm=None, depth=1., real_filter=False,
-            reduce_rank=False, normalize_fwd=None, verbose=None):
+            reduce_rank=False, verbose=None):
     """5D time-frequency beamforming based on DICS.
 
     Calculate source power in time-frequency windows using a spatial filter
@@ -610,8 +599,6 @@ def tf_dics(epochs, forward, noise_csds, tmin, tmax, tstep, win_lengths,
         If ``True``, take only the real part of the cross-spectral-density
         matrices to compute real filters. Defaults to ``False``.
     %(reduce_rank)s
-    normalize_fwd : bool
-        Deprecated, use ``depth`` instead.
     %(verbose)s
 
     Returns
@@ -627,7 +614,7 @@ def tf_dics(epochs, forward, noise_csds, tmin, tmax, tstep, win_lengths,
     DICS.
 
     An alternative to using noise CSDs is to normalize the forward solution
-    (``normalize_fwd``) or the beamformer weights (``weight_norm``). In
+    (``depth``) or the beamformer weights (``weight_norm``). In
     this case, ``noise_csds`` may be set to ``None``.
 
     References
@@ -757,7 +744,6 @@ def tf_dics(epochs, forward, noise_csds, tmin, tmax, tstep, win_lengths,
                                     label=label, pick_ori=pick_ori,
                                     rank=rank, inversion=inversion,
                                     weight_norm=weight_norm, depth=depth,
-                                    normalize_fwd=normalize_fwd,
                                     reduce_rank=reduce_rank,
                                     real_filter=real_filter, verbose=False)
                 stc, _ = apply_dics_csd(csd, filters, verbose=False)

@@ -7,6 +7,7 @@ from distutils.version import LooseVersion
 import gc
 import os
 import os.path as op
+from pathlib import Path
 import shutil
 import sys
 import warnings
@@ -27,6 +28,7 @@ except Exception:
 import numpy as np
 import mne
 from mne.datasets import testing
+from mne.utils import _pl
 
 test_path = testing.data_path(download=False)
 s_path = op.join(test_path, 'MEG', 'sample')
@@ -97,7 +99,10 @@ def pytest_configure(config):
     ignore:.*sphinx\.util\.smartypants is deprecated.*:
     ignore:.*pandas\.util\.testing is deprecated.*:
     ignore:.*tostring.*is deprecated.*:DeprecationWarning
+    ignore:.*QDesktopWidget\.availableGeometry.*:DeprecationWarning
+    ignore:Unable to enable faulthandler.*:UserWarning
     always:.*get_data.* is deprecated in favor of.*:DeprecationWarning
+    always::ResourceWarning
     """  # noqa: E501
     for warning_line in warning_lines.split('\n'):
         warning_line = warning_line.strip()
@@ -119,6 +124,13 @@ def check_verbose(request):
         pytest.fail('.'.join([request.module.__name__,
                               request.function.__name__]) +
                     ' modifies logger.level')
+
+
+@pytest.fixture(scope='function')
+def verbose_debug():
+    """Run a test with debug verbosity."""
+    with mne.utils.use_log_level('debug'):
+        yield
 
 
 @pytest.fixture(scope='session')
@@ -164,14 +176,25 @@ def matplotlib_config():
     cbook.CallbackRegistry = CallbackRegistryReraise
 
 
+@pytest.fixture(scope='session')
+def ci_macos():
+    """Determine if running on MacOS CI."""
+    return (os.getenv('CI', 'false').lower() == 'true' and
+            sys.platform == 'darwin')
+
+
+@pytest.fixture(scope='session')
+def azure_windows():
+    """Determine if running on Azure Windows."""
+    return (os.getenv('AZURE_CI_WINDOWS', 'false').lower() == 'true' and
+            sys.platform.startswith('win'))
+
+
 @pytest.fixture()
-def check_gui_ci():
+def check_gui_ci(ci_macos, azure_windows):
     """Skip tests that are not reliable on CIs."""
-    osx = (os.getenv('TRAVIS', 'false').lower() == 'true' and
-           sys.platform == 'darwin')
-    win = os.getenv('AZURE_CI_WINDOWS', 'false').lower() == 'true'
-    if win or osx:
-        pytest.skip('Skipping GUI tests on Travis OSX and Azure Windows')
+    if azure_windows or ci_macos:
+        pytest.skip('Skipping GUI tests on MacOS CIs and Azure Windows')
 
 
 @pytest.fixture(scope='session', params=[testing._pytest_param()])
@@ -300,6 +323,21 @@ def renderer_notebook():
         yield
 
 
+@pytest.fixture(scope='session')
+def pixel_ratio():
+    """Get the pixel ratio."""
+    from mne.viz.backends.tests._utils import (has_mayavi, has_pyvista,
+                                               has_pyqt5)
+    if not (has_mayavi() or has_pyvista()) or not has_pyqt5():
+        return 1.
+    from PyQt5.QtWidgets import QApplication, QMainWindow
+    _ = QApplication.instance() or QApplication([])
+    window = QMainWindow()
+    ratio = float(window.devicePixelRatio())
+    window.close()
+    return ratio
+
+
 @pytest.fixture(scope='function', params=[testing._pytest_param()])
 def subjects_dir_tmp(tmpdir):
     """Copy MNE-testing-data subjects_dir to a temp dir for manipulation."""
@@ -370,6 +408,7 @@ def _all_src_types_fwd(_fwd_surf, _fwd_subvolume):
             key = keys[1]
         a[key] = np.concatenate([a[key], b[key]], axis=axis)
     fwd['sol']['ncol'] = fwd['sol']['data'].shape[1]
+    fwd['nsource'] = fwd['sol']['ncol'] // 3
     fwd['src'] = fwd['src'] + f2['src']
     fwds['mixed'] = fwd
 
@@ -398,6 +437,13 @@ def all_src_types_inv_evoked(_all_src_types_inv_evoked):
     return invs, evoked
 
 
+@pytest.fixture(scope='function')
+def mixed_fwd_cov_evoked(_evoked_cov_sphere, _all_src_types_fwd):
+    """Compute inverses for all source types."""
+    evoked, cov, _ = _evoked_cov_sphere
+    return _all_src_types_fwd['mixed'].copy(), cov.copy(), evoked.copy()
+
+
 @pytest.fixture(scope='session')
 @pytest.mark.slowtest
 @pytest.mark.parametrize(params=[testing._pytest_param()])
@@ -413,3 +459,53 @@ def src_volume_labels():
     assert volume_labels[0] == 'Unknown'
     assert lut['Unknown'] == 0  # it will be excluded during label gen
     return src, tuple(volume_labels), lut
+
+
+def _fail(*args, **kwargs):
+    raise AssertionError('Test should not download')
+
+
+@pytest.fixture(scope='function')
+def download_is_error(monkeypatch):
+    """Prevent downloading by raising an error when it's attempted."""
+    monkeypatch.setattr(mne.utils.fetching, '_get_http', _fail)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Handle the end of the session."""
+    n = session.config.option.durations
+    if n is None:
+        return
+    print('\n')
+    try:
+        import pytest_harvest
+    except ImportError:
+        print('Module-level timings require pytest-harvest')
+        return
+    from py.io import TerminalWriter
+    # get the number to print
+    res = pytest_harvest.get_session_synthesis_dct(session)
+    files = dict()
+    for key, val in res.items():
+        parts = Path(key.split(':')[0]).parts
+        # split mne/tests/test_whatever.py into separate categories since these
+        # are essentially submodule-level tests. Keeping just [:3] works,
+        # except for mne/viz where we want level-4 granulatity
+        parts = parts[:4 if parts[:2] == ('mne', 'viz') else 3]
+        if not parts[-1].endswith('.py'):
+            parts = parts + ('',)
+        file_key = '/'.join(parts)
+        files[file_key] = files.get(file_key, 0) + val['pytest_duration_s']
+    files = sorted(list(files.items()), key=lambda x: x[1])[::-1]
+    # print
+    files = files[:n]
+    if len(files):
+        writer = TerminalWriter()
+        writer.line()  # newline
+        writer.sep('=', f'slowest {n} test module{_pl(n)}')
+        names, timings = zip(*files)
+        timings = [f'{timing:0.2f}s total' for timing in timings]
+        rjust = max(len(timing) for timing in timings)
+        timings = [timing.rjust(rjust) for timing in timings]
+        for name, timing in zip(names, timings):
+            writer.line(f'{timing.ljust(15)}{name}')

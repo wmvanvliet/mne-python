@@ -24,7 +24,7 @@ from .io.write import (start_block, end_block, write_int,
                        write_float_sparse_rcs, write_string,
                        write_float_matrix, write_int_matrix,
                        write_coord_trans, start_file, end_file, write_id)
-from .bem import read_bem_surfaces, ConductorModel
+from .bem import read_bem_surfaces
 from .fixes import _get_img_fdata
 from .surface import (read_surface, _create_surf_spacing, _get_ico_surface,
                       _tessellate_sphere_surf, _get_surf_neighbors,
@@ -34,7 +34,8 @@ from .surface import (read_surface, _create_surf_spacing, _get_ico_surface,
 from .utils import (get_subjects_dir, check_fname, logger, verbose,
                     _ensure_int, check_version, _get_call_line, warn,
                     _check_fname, _check_path_like, has_nibabel, _check_sphere,
-                    _validate_type, _check_option, _is_numeric, _pl, _suggest)
+                    _validate_type, _check_option, _is_numeric, _pl, _suggest,
+                    object_size, sizeof_fmt)
 from .parallel import parallel_func, check_n_jobs
 from .transforms import (invert_transform, apply_trans, _print_coord_trans,
                          combine_transforms, _get_trans,
@@ -70,9 +71,23 @@ def _get_lut(fname=None):
     _validate_type(fname, ('path-like', None), 'fname')
     if fname is None:
         fname = op.join(op.dirname(__file__), 'data', 'FreeSurferColorLUT.txt')
-    dtype = [('id', '<i8'), ('name', 'U47'),
+    _check_fname(fname, 'read', must_exist=True)
+    dtype = [('id', '<i8'), ('name', 'U'),
              ('R', '<i8'), ('G', '<i8'), ('B', '<i8'), ('A', '<i8')]
-    return np.genfromtxt(fname, dtype=dtype)
+    lut = {d[0]: list() for d in dtype}
+    with open(fname, 'r') as fid:
+        for line in fid:
+            line = line.strip()
+            if line.startswith('#') or not line:
+                continue
+            line = line.split()
+            if len(line) != len(dtype):
+                raise RuntimeError(f'LUT is improperly formatted: {fname}')
+            for d, part in zip(dtype, line):
+                lut[d[0]].append(part)
+    lut = {d[0]: np.array(lut[d[0]], dtype=d[1]) for d in dtype}
+    assert len(lut['name']) > 0
+    return lut
 
 
 def _get_lut_id(lut, label):
@@ -264,6 +279,9 @@ class SourceSpaces(list):
         subj = self._subject
         if subj is not None:
             extra += ['subject %r' % (subj,)]
+        sz = object_size(self)
+        if sz is not None:
+            extra += [f'~{sizeof_fmt(sz)}']
         return "<SourceSpaces: [%s] %s>" % (
             ', '.join(ss_repr), ', '.join(extra))
 
@@ -514,7 +532,7 @@ class SourceSpaces(list):
             n_diff = ((ix_ != ix) | (iy_ != iy) | (iz_ != iz)).sum()
             # generate use warnings for clipping
             if n_diff > 0:
-                warn(f'{n_diff} {src["kind"]} vertices lay outside of volume '
+                warn(f'{n_diff} {src["type"]} vertices lay outside of volume '
                      f'space. Consider using a larger volume space.')
             # get surface id or use default value
             # update image to include surface voxels
@@ -678,9 +696,6 @@ def read_source_spaces(fname, patch_stats=False, verbose=None):
 
 def _read_one_source_space(fid, this):
     """Read one source space."""
-    FIFF_BEM_SURF_NTRI = 3104
-    FIFF_BEM_SURF_TRIANGLES = 3106
-
     res = dict()
 
     tag = find_tag(fid, this, FIFF.FIFF_MNE_SOURCE_SPACE_ID)
@@ -782,7 +797,7 @@ def _read_one_source_space(fid, this):
 
     res['np'] = int(tag.data)
 
-    tag = find_tag(fid, this, FIFF_BEM_SURF_NTRI)
+    tag = find_tag(fid, this, FIFF.FIFF_BEM_SURF_NTRI)
     if tag is None:
         tag = find_tag(fid, this, FIFF.FIFF_MNE_SOURCE_SPACE_NTRI)
         if tag is None:
@@ -816,7 +831,7 @@ def _read_one_source_space(fid, this):
         raise ValueError('Vertex normal information is incorrect')
 
     if res['ntri'] > 0:
-        tag = find_tag(fid, this, FIFF_BEM_SURF_TRIANGLES)
+        tag = find_tag(fid, this, FIFF.FIFF_BEM_SURF_TRIANGLES)
         if tag is None:
             tag = find_tag(fid, this, FIFF.FIFF_MNE_SOURCE_SPACE_TRIANGLES)
             if tag is None:
@@ -1532,6 +1547,7 @@ def _check_mri(mri, subject, subjects_dir):
 
 def _check_volume_labels(volume_label, mri, name='volume_label'):
     _validate_type(mri, 'path-like', 'mri when %s is not None' % (name,))
+    mri = _check_fname(mri, overwrite='read', must_exist=True)
     if isinstance(volume_label, str):
         volume_label = [volume_label]
     _validate_type(volume_label, (list, tuple, dict), name)  # should be
@@ -1564,7 +1580,7 @@ def setup_volume_source_space(subject=None, pos=5.0, mri=None,
                               surface=None, mindist=5.0, exclude=0.0,
                               subjects_dir=None, volume_label=None,
                               add_interpolator=True, sphere_units='m',
-                              verbose=None):
+                              single_volume=False, verbose=None):
     """Set up a volume source space with grid spacing or discrete source space.
 
     Parameters
@@ -1627,6 +1643,14 @@ def setup_volume_source_space(subject=None, pos=5.0, mri=None,
         Defaults to ``"m"``.
 
         .. versionadded:: 0.20
+    single_volume : bool
+        If True, multiple values of ``volume_label`` will be merged into a
+        a single source space instead of occupying multiple source spaces
+        (one for each sub-volume), i.e., ``len(src)`` will be ``1`` instead of
+        ``len(volume_label)``. This can help conserve memory and disk space
+        when many labels are used.
+
+        .. versionadded:: 0.21
     %(verbose)s
 
     Returns
@@ -1692,7 +1716,6 @@ def setup_volume_source_space(subject=None, pos=5.0, mri=None,
         volume_label = _check_volume_labels(volume_label, mri)
     assert volume_label is None or isinstance(volume_label, dict)
 
-    need_warn = sphere_units is None and not isinstance(sphere, ConductorModel)
     sphere = _check_sphere(sphere, sphere_units=sphere_units)
 
     # triage bounding argument
@@ -1715,10 +1738,6 @@ def setup_volume_source_space(subject=None, pos=5.0, mri=None,
         logger.info('Sphere                : origin at (%.1f %.1f %.1f) mm'
                     % (1000 * sphere[0], 1000 * sphere[1], 1000 * sphere[2]))
         logger.info('              radius  : %.1f mm' % (1000 * sphere[3],))
-        if need_warn:
-            warn('sphere_units defaults to mm in 0.20 but will change to m in '
-                 '0.21, set it explicitly to avoid this warning',
-                 DeprecationWarning)
 
     # triage pos argument
     if isinstance(pos, dict):
@@ -1792,10 +1811,11 @@ def setup_volume_source_space(subject=None, pos=5.0, mri=None,
         # Make the grid of sources in MRI space
         sp = _make_volume_source_space(
             surf, pos, exclude, mindist, mri, volume_label,
-            vol_info=vol_info)
+            vol_info=vol_info, single_volume=single_volume)
     del sphere
     assert isinstance(sp, list)
-    assert len(sp) == 1 if volume_label is None else len(volume_label)
+    assert len(sp) == 1 if (volume_label is None or
+                            single_volume) else len(volume_label)
 
     # Compute an interpolation matrix to show data in MRI_VOXEL coord frame
     if mri is not None:
@@ -1895,6 +1915,46 @@ def _import_nibabel(why='use MRI files'):
     return nib
 
 
+def _mri_orientation(img, orientation):
+    """Get MRI orientation information from an image.
+
+    Parameters
+    ----------
+    img : instance of SpatialImage
+        The MRI image.
+    orientation : str
+        Orientation that you want. Can be "axial", "saggital", or "coronal".
+
+    Returns
+    -------
+    xyz : tuple, shape (3,)
+        The dimension indices for X, Y, and Z.
+    flips : tuple, shape (3,)
+        Whether each dimension requires a flip.
+    order : tuple, shape (3,)
+        The resulting order of the data if the given ``xyz`` and ``flips``
+        are used.
+
+    Notes
+    -----
+    .. versionadded:: 0.21
+    """
+    import nibabel as nib
+    _validate_type(img, nib.spatialimages.SpatialImage)
+    _check_option('orientation', orientation, ('coronal', 'axial', 'sagittal'))
+    axcodes = ''.join(nib.orientations.aff2axcodes(img.affine))
+    flips = {o: (1 if o in axcodes else -1) for o in 'RAS'}
+    axcodes = axcodes.replace('L', 'R').replace('P', 'A').replace('I', 'S')
+    order = dict(
+        coronal=('R', 'S', 'A'),
+        axial=('R', 'A', 'S'),
+        sagittal=('A', 'S', 'R'),
+    )[orientation]
+    xyz = tuple(axcodes.index(c) for c in order)
+    flips = tuple(flips[c] for c in order)
+    return xyz, flips, order
+
+
 def _get_mri_info_data(mri, data):
     # Read the segmentation data using nibabel
     if data:
@@ -1908,7 +1968,7 @@ def _get_mri_info_data(mri, data):
     if data:
         assert mgz is not None
         out['mri_vox_t'] = invert_transform(out['vox_mri_t'])
-        out['data'] = _get_img_fdata(mgz)
+        out['data'] = np.asarray(mgz.dataobj)
     return out
 
 
@@ -1925,7 +1985,7 @@ def _get_atlas_values(vol_info, rr):
 
 def _make_volume_source_space(surf, grid, exclude, mindist, mri=None,
                               volume_labels=None, do_neighbors=True, n_jobs=1,
-                              vol_info={}):
+                              vol_info={}, single_volume=False):
     """Make a source space which covers the volume bounded by surf."""
     # Figure out the grid size in the MRI coordinate frame
     if 'rr' in surf:
@@ -2024,6 +2084,16 @@ def _make_volume_source_space(surf, grid, exclude, mindist, mri=None,
             sp['mri_file'] = mri
             sps.append(sp)
         assert len(sps) == len(volume_labels)
+        # This will undo some of the work above, but the calculations are
+        # pretty trivial so allow it
+        if single_volume:
+            for sp in sps[1:]:
+                sps[0]['inuse'][sp['vertno']] = True
+            sp = sps[0]
+            sp['seg_name'] = '+'.join(s['seg_name'] for s in sps)
+            sps = sps[:1]
+            sp['vertno'] = np.where(sp['inuse'])[0]
+            sp['nuse'] = len(sp['vertno'])
     del sp, volume_labels
     if not do_neighbors:
         return sps
@@ -2613,7 +2683,8 @@ def get_volume_labels_from_aseg(mgz_fname, return_colors=False,
     """
     import nibabel as nib
     atlas = nib.load(mgz_fname)
-    want = np.unique(_get_img_fdata(atlas))
+    data = np.asarray(atlas.dataobj)  # don't need float here
+    want = np.unique(data)
     if atlas_ids is None:
         atlas_ids, colors = read_freesurfer_lut()
     elif return_colors:

@@ -116,6 +116,24 @@ nitpick_ignore = [
     ("py:class", "an object providing a view on D's values"),
     ("py:class", "a shallow copy of D"),
 ]
+for key in ('AcqParserFIF', 'BiHemiLabel', 'Dipole', 'DipoleFixed', 'Label',
+            'MixedSourceEstimate', 'MixedVectorSourceEstimate', 'Report',
+            'SourceEstimate', 'SourceMorph', 'VectorSourceEstimate',
+            'VolSourceEstimate', 'VolVectorSourceEstimate',
+            'channels.DigMontage', 'channels.Layout',
+            'decoding.CSP', 'decoding.EMS', 'decoding.FilterEstimator',
+            'decoding.GeneralizingEstimator', 'decoding.LinearModel',
+            'decoding.PSDEstimator', 'decoding.ReceptiveField',
+            'decoding.SPoC', 'decoding.Scaler', 'decoding.SlidingEstimator',
+            'decoding.TemporalFilter', 'decoding.TimeDelayingRidge',
+            'decoding.TimeFrequency', 'decoding.UnsupervisedSpatialFilter',
+            'decoding.Vectorizer',
+            'preprocessing.ICA', 'preprocessing.Xdawn',
+            'simulation.SourceSimulator',
+            'time_frequency.CrossSpectralDensity',
+            'utils.deprecated',
+            'viz.ClickableImage'):
+    nitpick_ignore.append(('py:obj', f'mne.{key}.__hash__'))
 suppress_warnings = ['image.nonlocal_uri']  # we intentionally link outside
 
 # The version info for the project you're documenting, acts as replacement for
@@ -269,7 +287,7 @@ html_show_sphinx = False
 # variables to pass to HTML templating engine
 build_dev_html = bool(int(os.environ.get('BUILD_DEV_HTML', False)))
 
-html_context = {'use_google_analytics': True, 'use_twitter': True,
+html_context = {'use_google_analytics': True,
                 'use_media_buttons': True, 'build_dev_html': build_dev_html}
 
 # This is the file name suffix for HTML files (e.g. ".xhtml").
@@ -331,6 +349,8 @@ intersphinx_mapping = {
     'seaborn': ('https://seaborn.pydata.org/', None),
     'statsmodels': ('https://www.statsmodels.org/dev', None),
     'patsy': ('https://patsy.readthedocs.io/en/latest', None),
+    'pyvista': ('https://docs.pyvista.org', None),
+    'imageio': ('https://imageio.readthedocs.io/en/latest', None),
     # There are some problems with dipy's redirect:
     # https://github.com/nipy/dipy/issues/1955
     'dipy': ('https://dipy.org/documentation/latest',
@@ -383,6 +403,11 @@ if any(x in scrapers for x in ('pyvista', 'mayavi')):
     scrapers += (report_scraper,)
 else:
     report_scraper = None
+if 'pyvista' in scrapers:
+    brain_scraper = mne.viz._brain._BrainScraper()
+    scrapers = list(scrapers)
+    scrapers.insert(scrapers.index('pyvista'), brain_scraper)
+    scrapers = tuple(scrapers)
 
 
 def append_attr_meth_examples(app, what, name, obj, options, lines):
@@ -426,6 +451,7 @@ class Resetter(object):
         # turn it off here (otherwise the build can be very slow)
         plt.ioff()
         gc.collect()
+        plt.rcParams['animation.embed_limit'] = 30.
 
 
 def reset_warnings(gallery_conf, fname):
@@ -537,7 +563,7 @@ sphinx_gallery_conf = {
     'abort_on_example_error': False,
     'reset_modules': ('matplotlib', Resetter()),  # called w/each script
     'image_scrapers': scrapers,
-    'show_memory': True,
+    'show_memory': not sys.platform.startswith('win'),
     'line_numbers': False,  # XXX currently (0.3.dev0) messes with style
     'within_subsection_order': FileNameSortKey,
     'capture_repr': ('_repr_html_',),
@@ -591,6 +617,7 @@ numpydoc_xref_aliases = {
     'VolSourceEstimate': 'mne.VolSourceEstimate',
     'VolVectorSourceEstimate': 'mne.VolVectorSourceEstimate',
     'MixedSourceEstimate': 'mne.MixedSourceEstimate',
+    'MixedVectorSourceEstimate': 'mne.MixedVectorSourceEstimate',
     'SourceEstimate': 'mne.SourceEstimate', 'Projection': 'mne.Projection',
     'ConductorModel': 'mne.bem.ConductorModel',
     'Dipole': 'mne.Dipole', 'DipoleFixed': 'mne.DipoleFixed',
@@ -628,10 +655,11 @@ numpydoc_xref_ignore = {
     'nd_features', 'n_classes', 'n_targets', 'n_slices', 'n_hpi', 'n_fids',
     'n_elp', 'n_pts', 'n_tris', 'n_nodes', 'n_nonzero', 'n_events_out',
     'n_segments', 'n_orient_inv', 'n_orient_fwd', 'n_orient', 'n_dipoles_lcmv',
-    'n_dipoles_fwd',
+    'n_dipoles_fwd', 'n_picks_ref', 'n_coords',
     # Undocumented (on purpose)
     'RawKIT', 'RawEximia', 'RawEGI', 'RawEEGLAB', 'RawEDF', 'RawCTF', 'RawBTi',
-    'RawBrainVision', 'RawCurry', 'RawNIRX', 'RawGDF',
+    'RawBrainVision', 'RawCurry', 'RawNIRX', 'RawGDF', 'RawSNIRF',
+    'RawPersyst', 'RawNihon',
     # sklearn subclasses
     'mapping', 'to', 'any',
     # unlinkable

@@ -298,7 +298,11 @@
 
 .. _Adam Li: http://github.com/adam2392
 
+.. _Simeon Wong: https://github.com/dtxe
+
 .. _Ramiro Gatti: https://github.com/ragatti
+
+.. _Liberty Hamilton: https://github.com/libertyh
 
 .. _Svea Marie Meyer: https://github.com/SveaMeyer13
 
@@ -307,3 +311,19 @@
 .. _Kyle Mathewson: https://github.com/kylemath
 
 .. _Ezequiel Mikulan: https://github.com/ezemikulan
+
+.. _Jan Sedivy: https://github.com/honzaseda
+
+.. _Johann Benerradi: https://github.com/HanBnrd
+
+.. _Rahul Nadkarni: https://github.com/rahuln
+
+.. _Lau Møller Andersen: https://github.com/ualsbombe
+
+.. _Martin Schulz: https://github.com/marsipu
+
+.. _Jeroen Van Der Donckt: https://github.com/jvdd
+
+.. _Steven Bierer: https://github.com/neurolaunch
+
+.. _Eduard Ort: https://github.com/eort

@@ -211,6 +211,11 @@ def _compute_beamformer(G, Cm, reg, n_orient, weight_norm, pick_ori,
 
     # inversion of the denominator
     _check_option('inversion', inversion, ('matrix', 'single'))
+    if inversion == 'single' and n_orient > 1 and pick_ori == 'vector' and \
+            weight_norm == 'unit-noise-gain-invariant':
+        raise ValueError(
+            'Cannot use pick_ori="vector" with inversion="single" and '
+            'weight_norm="unit-noise-gain-invariant"')
     if reduce_rank and inversion == 'single':
         raise ValueError('reduce_rank cannot be used with inversion="single"; '
                          'consider using inversion="matrix" if you have a '

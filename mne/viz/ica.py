@@ -258,7 +258,8 @@ def _get_psd_label_and_std(this_psd, dB, ica, num_std):
 @fill_doc
 def plot_ica_properties(ica, inst, picks=None, axes=None, dB=True,
                         plot_std=True, topomap_args=None, image_args=None,
-                        psd_args=None, figsize=None, show=True, reject='auto'):
+                        psd_args=None, figsize=None, show=True, reject='auto',
+                        reject_by_annotation=True):
     """Display component properties.
 
     Properties include the topography, epochs image, ERP/ERF, power
@@ -309,6 +310,9 @@ def plot_ica_properties(ica, inst, picks=None, axes=None, dB=True,
         If None, no rejection is applied. The default is 'auto',
         which applies the rejection parameters used when fitting
         the ICA object.
+    %(reject_by_annotation_raw)s
+
+        .. versionadded:: 0.21.0
 
     Returns
     -------
@@ -328,14 +332,12 @@ def plot_ica_properties(ica, inst, picks=None, axes=None, dB=True,
     # -------------------------
     _validate_type(inst, (BaseRaw, BaseEpochs), "inst", "Raw or Epochs")
     _validate_type(ica, ICA, "ica", "ICA")
+    _validate_type(plot_std, (bool, 'numeric'), 'plot_std')
     if isinstance(plot_std, bool):
         num_std = 1. if plot_std else 0.
-    elif isinstance(plot_std, (float, int)):
-        num_std = plot_std
-        plot_std = True
     else:
-        raise ValueError('plot_std has to be a bool, int or float, '
-                         'got %s instead' % type(plot_std))
+        plot_std = True
+    num_std = float(plot_std)
 
     # if no picks given - plot the first 5 components
     limit = min(5, ica.n_components_) if picks is None else len(ica.ch_names)
@@ -390,12 +392,20 @@ def plot_ica_properties(ica, inst, picks=None, axes=None, dB=True,
 
         # break up continuous signal into segments
         from ..epochs import make_fixed_length_epochs
-        inst_rejected = make_fixed_length_epochs(inst_rejected,
-                                                 duration=2.,
-                                                 verbose=False,
-                                                 preload=True)
-        inst = make_fixed_length_epochs(inst, duration=2., verbose=False,
-                                        preload=True)
+        inst_rejected = make_fixed_length_epochs(
+            inst_rejected,
+            duration=2,
+            preload=True,
+            reject_by_annotation=reject_by_annotation,
+            proj=False,
+            verbose=False)
+        inst = make_fixed_length_epochs(
+            inst,
+            duration=2,
+            preload=True,
+            reject_by_annotation=reject_by_annotation,
+            proj=False,
+            verbose=False)
         kind = "Segment"
     else:
         drop_inds = None
@@ -558,10 +568,7 @@ def _plot_ica_sources_evoked(evoked, picks, exclude, title, show, ica,
         plt.legend(loc='best')
     tight_layout(fig=fig)
 
-    # for old matplotlib, we actually need this to have a bounding
-    # box (!), so we have to put some valid text here, change
-    # alpha and  path effects later
-    texts.append(ax.text(0, 0, 'blank', zorder=3,
+    texts.append(ax.text(0, 0, '', zorder=3,
                          verticalalignment='baseline',
                          horizontalalignment='left',
                          fontweight='bold', alpha=0))
@@ -709,7 +716,7 @@ def plot_ica_scores(ica, scores, exclude=None, labels=None, axhline=None,
 
 @fill_doc
 def plot_ica_overlay(ica, inst, exclude=None, picks=None, start=None,
-                     stop=None, title=None, show=True):
+                     stop=None, title=None, show=True, n_pca_components=None):
     """Overlay of raw and cleaned signals given the unmixing matrix.
 
     This method helps visualizing signal quality and artifact rejection.
@@ -737,6 +744,9 @@ def plot_ica_overlay(ica, inst, exclude=None, picks=None, start=None,
         The figure title.
     show : bool
         Show figure if True.
+    %(n_pca_components_apply)s
+
+        .. versionadded:: 0.22
 
     Returns
     -------
@@ -768,17 +778,20 @@ def plot_ica_overlay(ica, inst, exclude=None, picks=None, start=None,
         data, times = inst[picks, start_compare:stop_compare]
 
         raw_cln = ica.apply(inst.copy(), exclude=exclude,
-                            start=start, stop=stop)
+                            start=start, stop=stop,
+                            n_pca_components=n_pca_components)
         data_cln, _ = raw_cln[picks, start_compare:stop_compare]
         fig = _plot_ica_overlay_raw(data=data, data_cln=data_cln,
                                     times=times, title=title,
                                     ch_types_used=ch_types_used, show=show)
-    elif isinstance(inst, Evoked):
+    else:
+        assert isinstance(inst, Evoked)
         inst = inst.copy().crop(start, stop)
         if picks is not None:
             inst.info['comps'] = []  # can be safely disabled
             inst.pick_channels([inst.ch_names[p] for p in picks])
-        evoked_cln = ica.apply(inst.copy(), exclude=exclude)
+        evoked_cln = ica.apply(inst.copy(), exclude=exclude,
+                               n_pca_components=n_pca_components)
         fig = _plot_ica_overlay_evoked(evoked=inst, evoked_cln=evoked_cln,
                                        title=title, show=show)
 
@@ -833,10 +846,12 @@ def _plot_ica_overlay_evoked(evoked, evoked_cln, title, show):
 
     Parameters
     ----------
-    ica : instance of mne.preprocessing.ICA
-        The ICA object.
-    epochs : instance of mne.Epochs
-        The Epochs to be regarded.
+    evoked : instance of mne.Evoked
+        The Evoked before IC rejection.
+    evoked_cln : instance of mne.Evoked
+        The Evoked after IC rejection.
+    title : str | None
+        The title of the figure.
     show : bool
         If True, all open plots will be shown.
 
@@ -855,15 +870,17 @@ def _plot_ica_overlay_evoked(evoked, evoked_cln, title, show):
                          'Found different channels.')
 
     fig, axes = plt.subplots(n_rows, 1)
-    fig.suptitle('Average signal before (red) and after (black) ICA')
+    if title is None:
+        title = 'Average signal before (red) and after (black) ICA'
+    fig.suptitle(title)
     axes = axes.flatten() if isinstance(axes, np.ndarray) else axes
 
-    evoked.plot(axes=axes, show=show, time_unit='s')
+    evoked.plot(axes=axes, show=False, time_unit='s')
     for ax in fig.axes:
         for line in ax.get_lines():
             line.set_color('r')
     fig.canvas.draw()
-    evoked_cln.plot(axes=axes, show=show, time_unit='s')
+    evoked_cln.plot(axes=axes, show=False, time_unit='s')
     tight_layout(fig=fig)
 
     fig.subplots_adjust(top=0.90)

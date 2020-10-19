@@ -4,7 +4,7 @@ version: 2
 jobs:
     build_docs:
       docker:
-        - image: circleci/python:3.8.1-buster
+        - image: circleci/python:3.8.5-buster
       steps:
         - checkout
         - run:
@@ -14,10 +14,10 @@ jobs:
               echo "set -e" >> $BASH_ENV
               echo "export DISPLAY=:99" >> $BASH_ENV
               echo "export OPENBLAS_NUM_THREADS=4" >> $BASH_ENV
+              echo "export XDG_RUNTIME_DIR=/tmp/runtime-circleci"  >> $BASH_ENV
               source tools/get_minimal_commands.sh
               echo "source ${PWD}/tools/get_minimal_commands.sh" >> $BASH_ENV
               echo "export MNE_3D_BACKEND=pyvista" >> $BASH_ENV
-              echo "export _MNE_BRAIN_TRACES_AUTO=false" >> $BASH_ENV
               echo "export PATH=~/.local/bin/:${MNE_ROOT}/bin:$PATH" >> $BASH_ENV
               echo "BASH_ENV:"
               cat $BASH_ENV
@@ -73,18 +73,16 @@ jobs:
             command: |
               mkdir -p $HOME/.fonts
               curl https://codeload.github.com/adobe-fonts/source-code-pro/tar.gz/2.030R-ro/1.050R-it | tar xz -C $HOME/.fonts
-              curl https://codeload.github.com/adobe-fonts/source-sans-pro/tar.gz/2.045R-ro/1.095R-it | tar xz -C $HOME/.fonts
+              curl https://codeload.github.com/adobe-fonts/source-sans-pro/tar.gz/3.006R | tar xz -C $HOME/.fonts
               fc-cache -f
 
         - run:
             name: Get Python running
             command: |
               python -m pip install --user --upgrade --progress-bar off pip setuptools
-              python -m pip install --user --upgrade --progress-bar off -r requirements.txt
-              python -m pip uninstall -yq pysurfer mayavi
               python -m pip install --user --upgrade --progress-bar off --pre sphinx
-              python -m pip install --user --upgrade --progress-bar off ipython sphinx_fontawesome sphinx_bootstrap_theme memory_profiler "https://github.com/sphinx-gallery/sphinx-gallery/archive/master.zip"
-              python -m pip install --user --upgrade seaborn
+              python -m pip install --user --upgrade --progress-bar off -r requirements.txt -r requirements_testing.txt -r requirements_doc.txt
+              python -m pip uninstall -yq pysurfer mayavi
               python -m pip install --user -e .
 
         - save_cache:
@@ -119,7 +117,7 @@ jobs:
                 echo "Doing a full dev build";
                 echo html_dev > build.txt;
                 python -c "import mne; mne.datasets._download_all_example_data()";
-              elif [ "$CIRCLE_BRANCH" == "maint/0.20" ]; then
+              elif [ "$CIRCLE_BRANCH" == "maint/0.21" ]; then
                 echo "Doing a full stable build";
                 echo html_stable > build.txt;
                 python -c "import mne; mne.datasets._download_all_example_data()";
@@ -355,7 +353,7 @@ jobs:
             command: |
                set -e;
                python -m pip install --user --progress-bar off numpy scipy matplotlib pillow
-               python -m pip install --user --progress-bar off sphinx numpydoc sphinx_fontawesome sphinx_bootstrap_theme "https://github.com/sphinx-gallery/sphinx-gallery/archive/master.zip" memory_profiler https://github.com/mcmtroffaes/sphinxcontrib-bibtex/archive/29694f215b39d64a31b845aafd9ff2ae9329494f.zip
+               python -m pip install --user --progress-bar off -r requirements_doc.txt
                python -m pip install --user -e .
         - run:
             name: make linkcheck
@@ -397,7 +395,7 @@ jobs:
             name: Deploy docs
             command: |
               set -e;
-              if [ "${CIRCLE_BRANCH}" == "master" ] || [ "${CIRCLE_BRANCH}" == "maint/0.20" ]; then
+              if [ "${CIRCLE_BRANCH}" == "master" ] || [ "${CIRCLE_BRANCH}" == "maint/0.21" ]; then
                 git config --global user.email "circle@mne.com";
                 git config --global user.name "Circle CI";
                 cd ~/mne-tools.github.io;
@@ -441,7 +439,7 @@ workflows:
             branches:
               only:
                 - master
-                - maint/0.20
+                - maint/0.21
 
   weekly:
     jobs:

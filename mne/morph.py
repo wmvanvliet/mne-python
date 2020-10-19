@@ -134,7 +134,7 @@ def compute_source_morph(src, subject_from=None, subject_to='fsaverage',
     subjects with the ``mris_left_right_register`` FreeSurfer command. The
     ``fsaverage_sym`` subject is included with FreeSurfer > 5.1 and can be
     obtained as described `here
-    <http://surfer.nmr.mgh.harvard.edu/fswiki/Xhemi>`_. For statistical
+    <https://surfer.nmr.mgh.harvard.edu/fswiki/Xhemi>`_. For statistical
     comparisons between hemispheres, use of the symmetric ``fsaverage_sym``
     model is recommended to minimize bias :footcite:`GreveEtAl2013`.
 
@@ -463,21 +463,33 @@ class SourceMorph(object):
         assert img_to.ndim == 4 and img_to.shape[-1] == 1
         img_to = img_to[:, :, :, 0]
 
-        # reslice to match morph
-        img_to, img_to_affine = reslice(
-            img_to, self.affine, _get_zooms_orig(self), self.zooms)
+        attrs = ('real', 'imag') if np.iscomplexobj(img_to) else ('real',)
+        img_complex = 0.
+        for attr in attrs:
+            # reslice to match morph
+            img_real, _ = reslice(
+                getattr(img_to, attr), self.affine,
+                _get_zooms_orig(self), self.zooms)
 
-        # morph data
-        img_to = self.pre_affine.transform(img_to)
-        if self.sdr_morph is not None:
-            img_to = self.sdr_morph.transform(img_to)
+            # morph data
+            img_real = self.pre_affine.transform(img_real)
+            if self.sdr_morph is not None:
+                img_real = self.sdr_morph.transform(img_real)
 
-        # subselect the correct cube if src_to is provided
-        if self.src_data['to_vox_map'] is not None:
-            # order=0 (nearest) should be fine since it's just subselecting
-            img_to = SpatialImage(img_to, self.affine)
-            img_to = resample_from_to(img_to, self.src_data['to_vox_map'], 1)
-            img_to = _get_img_fdata(img_to)
+            # subselect the correct cube if src_to is provided
+            if self.src_data['to_vox_map'] is not None:
+                # order=0 (nearest) should be fine since it's just subselecting
+                img_real = SpatialImage(img_real, self.affine)
+                img_real = resample_from_to(
+                    img_real, self.src_data['to_vox_map'], 1)
+                img_real = _get_img_fdata(img_real)
+
+            # combine real and complex parts
+            if attr == 'real':
+                img_complex = img_complex + img_real
+            else:
+                img_complex = img_complex + 1j * img_real
+        img_to = img_complex
 
         # reshape to nvoxel x nvol:
         # in the MNE definition of volume source spaces,
@@ -800,7 +812,9 @@ def _interpolate_data(stc, morph, mri_resolution, mri_space, output):
 
     n_times = stc.data.shape[1]
     shape = morph.src_data['src_shape'][::-1] + (n_times,)  # SAR->RAST
-    vols = np.zeros((np.prod(shape[:3]), shape[3]), order='F')  # flatten
+    dtype = np.complex128 if np.iscomplexobj(stc.data) else np.float64
+    # order='F' so that F-order flattening is faster
+    vols = np.zeros((np.prod(shape[:3]), shape[3]), dtype=dtype, order='F')
     n_vertices_seen = 0
     for this_inuse in inuse:
         this_inuse = this_inuse.astype(bool)
@@ -818,7 +832,7 @@ def _interpolate_data(stc, morph, mri_resolution, mri_space, output):
         shape = morph.src_data['src_shape_full'][::-1] + (n_times,)
         vols = _csr_dot(
             morph.src_data['interpolator'], vols,
-            np.zeros((np.prod(shape[:3]), shape[3]), order='F'))
+            np.zeros((np.prod(shape[:3]), shape[3]), dtype=dtype, order='F'))
 
     # reshape back to proper shape
     vols = np.reshape(vols, shape, order='F')
@@ -856,6 +870,11 @@ def _interpolate_data(stc, morph, mri_resolution, mri_space, output):
 
 ###############################################################################
 # Morph for VolSourceEstimate
+
+def _compute_r2(a, b):
+    return 100 * (a.ravel() @ b.ravel()) / \
+        (np.linalg.norm(a) * np.linalg.norm(b))
+
 
 def _compute_morph_sdr(mri_from, mri_to, niter_affine, niter_sdr, zooms):
     """Get a matrix that morphs data from one subject to another."""
@@ -902,51 +921,49 @@ def _compute_morph_sdr(mri_from, mri_to, niter_affine, niter_sdr, zooms):
 
     # translation
     logger.info('Optimizing translation:')
-    with wrapped_stdout(indent='    '):
+    with wrapped_stdout(indent='    ', cull_newlines=True):
         translation = affreg.optimize(
             mri_to, mri_from, transforms.TranslationTransform3D(), None,
             affine, mri_from_affine, starting_affine=c_of_mass.affine)
 
     # rigid body transform (translation + rotation)
     logger.info('Optimizing rigid-body:')
-    with wrapped_stdout(indent='    '):
+    with wrapped_stdout(indent='    ', cull_newlines=True):
         rigid = affreg.optimize(
             mri_to, mri_from, transforms.RigidTransform3D(), None,
             affine, mri_from_affine, starting_affine=translation.affine)
+    mri_from_to = rigid.transform(mri_from)
     dist = np.linalg.norm(rigid.affine[:3, 3])
     angle = np.rad2deg(_angle_between_quats(
         np.zeros(3), rot_to_quat(rigid.affine[:3, :3])))
 
-    logger.info(f'Translation: {dist:5.1f} mm')
-    logger.info(f'Rotation:    {angle:5.1f}°')
-    logger.info('')
+    logger.info(f'    Translation: {dist:6.1f} mm')
+    logger.info(f'    Rotation:    {angle:6.1f}°')
+    logger.info(f'    R²:          {_compute_r2(mri_to, mri_from_to):6.1f}%')
 
     # affine transform (translation + rotation + scaling)
     logger.info('Optimizing full affine:')
-    with wrapped_stdout(indent='    '):
+    with wrapped_stdout(indent='    ', cull_newlines=True):
         pre_affine = affreg.optimize(
             mri_to, mri_from, transforms.AffineTransform3D(), None,
             affine, mri_from_affine, starting_affine=rigid.affine)
-
-    # compute mapping
     mri_from_to = pre_affine.transform(mri_from)
+    logger.info(f'    R²:          {_compute_r2(mri_to, mri_from_to):6.1f}%')
+
+    # SDR
     shape = tuple(pre_affine.domain_shape)
     if len(niter_sdr):
         sdr = imwarp.SymmetricDiffeomorphicRegistration(
             metrics.CCMetric(3), list(niter_sdr))
         logger.info('Optimizing SDR:')
-        with wrapped_stdout(indent='    '):
+        with wrapped_stdout(indent='    ', cull_newlines=True):
             sdr_morph = sdr.optimize(mri_to, pre_affine.transform(mri_from))
         assert shape == tuple(sdr_morph.domain_shape)  # should be tuple of int
         mri_from_to = sdr_morph.transform(mri_from_to)
     else:
         sdr_morph = None
 
-    mri_to, mri_from_to = mri_to.ravel(), mri_from_to.ravel()
-    mri_from_to /= np.linalg.norm(mri_from_to)
-    mri_to /= np.linalg.norm(mri_to)
-    r2 = 100 * (mri_to @ mri_from_to)
-    logger.info(f'Variance explained by morph: {r2:0.1f}%')
+    logger.info(f'    R²:          {_compute_r2(mri_to, mri_from_to):6.1f}%')
 
     # To debug to_vox_map, this can be used:
     # from nibabel.processing import resample_from_to

@@ -19,7 +19,8 @@ from matplotlib.figure import Figure
 from matplotlib.patches import Circle
 
 from mne import (read_evokeds, read_proj, make_fixed_length_events, Epochs,
-                 compute_proj_evoked, find_layout, pick_types, create_info)
+                 compute_proj_evoked, find_layout, pick_types, create_info,
+                 read_cov)
 from mne.io.proj import make_eeg_average_ref_proj, Projection
 from mne.io import read_raw_fif, read_info, RawArray
 from mne.io.constants import FIFF
@@ -28,7 +29,6 @@ from mne.io.compensator import get_current_comp
 from mne.channels import read_layout, make_dig_montage
 from mne.datasets import testing
 from mne.time_frequency.tfr import AverageTFR
-from mne.utils import run_tests_if_main
 
 from mne.viz import plot_evoked_topomap, plot_projs_topomap, topomap
 from mne.viz.topomap import (_get_pos_outlines, _onselect, plot_topomap,
@@ -48,6 +48,7 @@ raw_fname = op.join(base_dir, 'test_raw.fif')
 event_name = op.join(base_dir, 'test-eve.fif')
 ctf_fname = op.join(base_dir, 'test_ctf_comp_raw.fif')
 layout = read_layout('Vectorview-all')
+cov_fname = op.join(base_dir, 'test-cov.fif')
 
 
 def test_plot_topomap_interactive():
@@ -125,6 +126,11 @@ def test_plot_projs_topomap():
     for vlim in ('joint', (-1, 1), (None, 0.5), (0.5, None), (None, None)):
         plot_projs_topomap(projs[:-1], info, vlim=vlim, colorbar=True)
     plt.close('all')
+
+    eeg_proj = make_eeg_average_ref_proj(info)
+    info_meg = pick_info(info, pick_types(info, meg=True, eeg=False))
+    with pytest.raises(ValueError, match='No channel names in info match p'):
+        plot_projs_topomap([eeg_proj], info_meg)
 
 
 def test_plot_topomap_animation():
@@ -223,7 +229,7 @@ def test_plot_topomap_basic(monkeypatch):
         plot_topomap(data, info, extrapolate='head', border=[1, 2, 3])
 
     # error when str is not 'mean':
-    error_msg = 'border must be numeric or "mean", got \'fancy\''
+    error_msg = "The only allowed value is 'mean', but got 'fancy' instead."
     with pytest.raises(ValueError, match=error_msg):
         plot_topomap(data, info, extrapolate='head', border='fancy')
 
@@ -567,4 +573,10 @@ def test_plot_topomap_nirs_ica(fnirs_epochs):
     plt.close('all')
 
 
-run_tests_if_main()
+def test_plot_cov_topomap():
+    """Test plotting a covariance topomap."""
+    cov = read_cov(cov_fname)
+    info = read_info(evoked_fname)
+    cov.plot_topomap(info)
+    cov.plot_topomap(info, noise_cov=cov)
+    plt.close('all')

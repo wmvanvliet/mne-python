@@ -65,12 +65,15 @@ Reading raw data
    read_raw_kit
    read_raw_nicolet
    read_raw_nirx
+   read_raw_snirf
    read_raw_eeglab
    read_raw_brainvision
    read_raw_egi
    read_raw_fif
    read_raw_eximia
    read_raw_fieldtrip
+   read_raw_persyst
+   read_raw_nihon
 
 Base class:
 
@@ -222,8 +225,10 @@ Visualization
 .. autosummary::
    :toctree: generated/
 
+   Brain
    ClickableImage
    add_background_image
+   centers_to_edges
    compare_fiff
    circular_layout
    iter_topography
@@ -315,6 +320,7 @@ Projections:
 
    Layout
    DigMontage
+   compute_native_head_t
    fix_mag_coil_types
    read_polhemus_fastscan
    get_builtin_montages
@@ -338,6 +344,7 @@ Projections:
    rename_channels
    generate_2d_layout
    make_1020_channel_selections
+   combine_channels
 
 :py:mod:`mne.preprocessing`:
 
@@ -352,10 +359,12 @@ Projections:
 
    ICA
    Xdawn
+   annotate_flat
    annotate_movement
    annotate_muscle_zscore
    compute_average_dev_head_t
    compute_current_source_density
+   compute_fine_calibration
    compute_proj_ecg
    compute_proj_eog
    create_ecg_epochs
@@ -367,13 +376,15 @@ Projections:
    ica_find_ecg_events
    ica_find_eog_events
    infomax
-   mark_flat
    maxwell_filter
    oversampled_temporal_projection
    peak_finder
    read_ica
+   regress_artifact
    corrmap
    read_ica_eeglab
+   read_fine_calibration
+   write_fine_calibration
 
 :py:mod:`mne.preprocessing.nirs`:
 
@@ -537,6 +548,19 @@ Sensor Space Data
    read_reject_parameters
    read_selection
    rename_channels
+
+:py:mod:`mne.baseline`:
+
+.. automodule:: mne.baseline
+   :no-members:
+   :no-inherited-members:
+
+.. currentmodule:: mne.baseline
+
+.. autosummary::
+   :toctree: generated/
+
+   rescale
 
 
 Covariance computation
@@ -719,7 +743,6 @@ Inverse Solutions
    apply_dics_epochs
    rap_music
    tf_dics
-   tf_lcmv
    make_lcmv_resolution_matrix
 
 .. currentmodule:: mne
@@ -781,6 +804,7 @@ Source Space Data
    read_source_morph
    split_label
    stc_to_label
+   stc_near_sensors
    transform_surface_to
    vertex_to_mni
    write_labels_to_annot

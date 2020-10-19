@@ -6,20 +6,15 @@
 #
 # License: BSD (3-clause)
 import numpy as np
-from scipy import linalg
 
 from ..rank import compute_rank
 from ..io.meas_info import _simplify_info
 from ..io.pick import pick_channels_cov, pick_info
 from ..forward import _subject_from_forward
 from ..minimum_norm.inverse import combine_xyz, _check_reference, _check_depth
-from ..cov import compute_covariance
 from ..source_estimate import _make_stc, _get_src_type
-from ..utils import (logger, verbose, warn, _reg_pinv,
-                     _check_channels_spatial_filter, _check_option)
-from ..utils import (_check_one_ch_type, _check_rank, _check_info_inv,
-                     deprecated)
-from .. import Epochs
+from ..utils import logger, verbose, _check_channels_spatial_filter
+from ..utils import _check_one_ch_type, _check_info_inv
 from ._compute_beamformer import (
     _check_proj_match, _prepare_beamformer_input, _compute_power,
     _compute_beamformer, _check_src_type, Beamformer)
@@ -27,7 +22,8 @@ from ._compute_beamformer import (
 
 @verbose
 def make_lcmv(info, forward, data_cov, reg=0.05, noise_cov=None, label=None,
-              pick_ori=None, rank='info', weight_norm='unit-noise-gain',
+              pick_ori=None, rank='info',
+              weight_norm='unit-noise-gain-invariant',
               reduce_rank=False, depth=None, inversion='matrix', verbose=None):
     """Compute LCMV spatial filter.
 
@@ -53,6 +49,7 @@ def make_lcmv(info, forward, data_cov, reg=0.05, noise_cov=None, label=None,
         - ``'vector'``
             Keeps the currents for each direction separate
     %(rank_info)s
+<<<<<<< HEAD
     inversion : 'single' | 'matrix'
         This determines how the beamformer deals with source spaces in "free"
         orientation. Such source spaces define three orthogonal dipoles at each
@@ -66,12 +63,22 @@ def make_lcmv(info, forward, data_cov, reg=0.05, noise_cov=None, label=None,
     %(weight_norm)s
 
         Defaults to ``'unit-noise-gain'``.
+=======
+    %(weight_norm)s
+
+        Defaults to ``'unit-noise-gain-invariant'``.
+>>>>>>> master
     %(reduce_rank)s
     %(depth)s
 
         .. versionadded:: 0.18
     %(bf_inversion)s
+<<<<<<< HEAD
         Defaults to ``'matrix'``.
+=======
+
+        .. versionadded:: 0.21
+>>>>>>> master
     %(verbose)s
 
     Returns
@@ -132,6 +139,17 @@ def make_lcmv(info, forward, data_cov, reg=0.05, noise_cov=None, label=None,
     Notes
     -----
     The original reference is :footcite:`VanVeenEtAl1997`.
+<<<<<<< HEAD
+=======
+
+    To obtain the Sekihara unit-noise-gain vector beamformer, you should use
+    ``weight_norm='unit-noise-gain', pick_ori='vector'`` followed by
+    :meth:`vec_stc.project('pca', src) <mne.VectorSourceEstimate.project>`.
+
+    .. versionchanged:: 0.21
+       The computations were extensively reworked, and the default for
+       ``weight_norm`` was set to ``'unit-noise-gain-invariant'``.
+>>>>>>> master
 
     References
     ----------
@@ -460,6 +478,7 @@ def apply_lcmv_cov(data_cov, filters, verbose=None):
                      src_type=filters['src_type'], tmin=0., tstep=1.,
                      subject=filters['subject'],
                      source_nn=filters['source_nn'], warn_text=warn_text))
+<<<<<<< HEAD
 
 
 @verbose
@@ -746,3 +765,5 @@ def tf_lcmv(epochs, forward, noise_covs, tmin, tmax, tstep, win_lengths,
         stcs.append(stc)
 
     return stcs
+=======
+>>>>>>> master

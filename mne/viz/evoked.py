@@ -27,9 +27,9 @@ from .utils import (_draw_proj_checkbox, tight_layout, _check_delayed_ssp,
                     _setup_vmin_vmax, _check_cov, _make_combine_callable,
                     _validate_if_list_of_axes, _triage_rank_sss,
                     _connection_line, _get_color_list, _setup_ax_spines,
-                    _setup_plot_projector, _prepare_joint_axes,
+                    _setup_plot_projector, _prepare_joint_axes, _check_option,
                     _set_title_multiple_electrodes, _check_time_unit,
-                    _plot_masked_image, _trim_ticks)
+                    _plot_masked_image, _trim_ticks, _set_window_title)
 from ..utils import (logger, _clean_names, warn, _pl, verbose, _validate_type,
                      _check_if_nan, _check_ch_locs, fill_doc, _is_numeric)
 
@@ -261,6 +261,7 @@ def _plot_evoked(evoked, picks, exclude, unit, show, ylim, proj, xlim, hline,
                          "`axes` must not be a dict either.")
 
     time_unit, times = _check_time_unit(time_unit, evoked.times)
+    evoked = evoked.copy()  # we modify info
     info = evoked.info
     if axes is not None and proj == 'interactive':
         raise RuntimeError('Currently only single axis figures are supported'
@@ -313,20 +314,26 @@ def _plot_evoked(evoked, picks, exclude, unit, show, ylim, proj, xlim, hline,
         fig = axes[0].get_figure()
 
     if window_title is not None:
-        fig.canvas.set_window_title(window_title)
+        _set_window_title(fig, window_title)
 
     if len(axes) != len(ch_types_used):
         raise ValueError('Number of axes (%g) must match number of channel '
                          'types (%d: %s)' % (len(axes), len(ch_types_used),
                                              sorted(ch_types_used)))
+    _check_option('proj', proj, (True, False, 'interactive', 'reconstruct'))
     noise_cov = _check_cov(noise_cov, info)
+    if proj == 'reconstruct' and noise_cov is not None:
+        raise ValueError('Cannot use proj="reconstruct" when noise_cov is not '
+                         'None')
     projector, whitened_ch_names = _setup_plot_projector(
         info, noise_cov, proj=proj is True, nave=evoked.nave)
-    evoked = evoked.copy()
     if len(whitened_ch_names) > 0:
         unit = False
     if projector is not None:
         evoked.data[:] = np.dot(projector, evoked.data)
+    if proj == 'reconstruct':
+        evoked = evoked._reconstruct_proj()
+
     if plot_type == 'butterfly':
         _plot_lines(evoked.data, info, picks, fig, axes, spatial_colors, unit,
                     units, scalings, hline, gfp, types, zorder, xlim, ylim,
@@ -485,10 +492,7 @@ def _plot_lines(data, info, picks, fig, axes, spatial_colors, unit, units,
                     if spatial_colors is True:
                         line.set_linestyle("--")
             ax.set_ylabel(ch_unit)
-            # for old matplotlib, we actually need this to have a bounding
-            # box (!), so we have to put some valid text here, change
-            # alpha and path effects later
-            texts.append(ax.text(0, 0, 'blank', zorder=3,
+            texts.append(ax.text(0, 0, '', zorder=3,
                                  verticalalignment='baseline',
                                  horizontalalignment='left',
                                  fontweight='bold', alpha=0,
@@ -647,10 +651,7 @@ def plot_evoked(evoked, picks=None, exclude='bads', unit=True, show=True,
         for each channel equals the pyplot default.
     xlim : 'tight' | tuple | None
         X limits for plots.
-    proj : bool | 'interactive'
-        If true SSP projections are applied before display. If 'interactive',
-        a check box for reversible selection of SSP projection vectors will
-        be shown.
+    %(plot_proj)s
     hline : list of float | None
         The values at which to show an horizontal line.
     units : dict | None
@@ -1332,8 +1333,7 @@ def plot_evoked_joint(evoked, times="peaks", title='', picks=None,
     ts_args = dict() if ts_args is None else ts_args.copy()
     ts_args['time_unit'], _ = _check_time_unit(
         ts_args.get('time_unit', 's'), evoked.times)
-    if topomap_args is None:
-        topomap_args = dict()
+    topomap_args = dict() if topomap_args is None else topomap_args.copy()
 
     got_axes = False
     illegal_args = {"show", 'times', 'exclude'}
@@ -1352,7 +1352,21 @@ def plot_evoked_joint(evoked, times="peaks", title='', picks=None,
 
     # channel selection
     # simply create a new evoked object with the desired channel selection
-    evoked = _pick_inst(evoked, picks, exclude, copy=True)
+    # Need to deal with proj before picking to avoid bad projections
+    proj = topomap_args.get('proj', True)
+    proj_ts = ts_args.get('proj', True)
+    if proj_ts != proj:
+        raise ValueError(
+            f'topomap_args["proj"] (default True, got {proj}) must match '
+            f'ts_args["proj"] (default True, got {proj_ts})')
+    _check_option('topomap_args["proj"]', proj, (True, False, 'reconstruct'))
+    evoked = evoked.copy()
+    if proj:
+        evoked.apply_proj()
+        if proj == 'reconstruct':
+            evoked._reconstruct_proj()
+    topomap_args['proj'] = ts_args['proj'] = False  # don't reapply
+    evoked = _pick_inst(evoked, picks, exclude, copy=False)
     info = evoked.info
     ch_types = _get_channel_types(info, unique=True, only_data_chs=True)
 
@@ -1909,9 +1923,12 @@ def plot_compare_evokeds(evokeds, picks=None, colors=None,
     ----------
     evokeds : instance of mne.Evoked | list | dict
         If a single Evoked instance, it is plotted as a time series.
+        If a list of Evokeds, the contents are plotted with their
+        ``.comment`` attributes used as condition labels. If no comment is set,
+        the index of the respectiv Evoked the list will be used instead,
+        starting with ``1`` for the first Evoked.
         If a dict whose values are Evoked objects, the contents are plotted as
-        single time series each and the keys are used as condition labels.
-        If a list of Evokeds, the contents are plotted with indices as labels.
+        single time series each and the keys are used as labels.
         If a [dict/list] of lists, the unweighted mean is plotted as a time
         series and the parametric confidence interval is plotted as a shaded
         area. All instances must have the same shape - channel numbers, time
@@ -2112,8 +2129,19 @@ def plot_compare_evokeds(evokeds, picks=None, colors=None,
     # build up evokeds into a dict, if it's not already
     if isinstance(evokeds, Evoked):
         evokeds = [evokeds]
+
     if isinstance(evokeds, (list, tuple)):
-        evokeds = {str(idx + 1): evk for idx, evk in enumerate(evokeds)}
+        evokeds_copy = evokeds.copy()
+        evokeds = dict()
+
+        for evk_idx, evk in enumerate(evokeds_copy, start=1):
+            label = None
+            if hasattr(evk, 'comment'):
+                label = evk.comment
+            label = label if label else str(evk_idx)
+            evokeds[label] = evk
+        del evokeds_copy
+
     if not isinstance(evokeds, dict):
         raise TypeError('"evokeds" must be a dict, list, or instance of '
                         'mne.Evoked; got {}'.format(type(evokeds).__name__))

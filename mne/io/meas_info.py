@@ -18,10 +18,10 @@ import numpy as np
 from scipy import linalg
 
 from .pick import channel_type, pick_channels, pick_info
-from .constants import FIFF
+from .constants import FIFF, _coord_frame_named
 from .open import fiff_open
 from .tree import dir_tree_find
-from .tag import read_tag, find_tag, _coord_dict
+from .tag import read_tag, find_tag, _ch_coord_dict
 from .proj import (_read_proj, _write_proj, _uniquify_projs, _normalize_proj,
                    Projection)
 from .ctf_comp import read_ctf_comp, write_ctf_comp
@@ -67,16 +67,14 @@ _kind_dict = dict(
 def _get_valid_units():
     """Get valid units according to the International System of Units (SI).
 
-    The International System of Units (SI, [1]_) is the default system for
-    describing units in the Brain Imaging Data Structure (BIDS). For more
-    information, see the BIDS specification [2]_ and the appendix "Units"
-    therein.
+    The International System of Units (SI, :footcite:`WikipediaSI`) is the
+    default system for describing units in the Brain Imaging Data Structure
+    (BIDS). For more information, see the BIDS specification
+    :footcite:`BIDSdocs` and the appendix "Units" therein.
 
     References
     ----------
-    [1] .. https://en.wikipedia.org/wiki/International_System_of_Units
-    [2] .. https://bids-specification.readthedocs.io/en/stable/
-
+    .. footbibliography::
     """
     valid_prefix_names = ['yocto', 'zepto', 'atto', 'femto', 'pico', 'nano',
                           'micro', 'milli', 'centi', 'deci', 'deca', 'hecto',
@@ -854,10 +852,11 @@ def read_fiducials(fname, verbose=None):
             pos = isotrak['directory'][k].pos
             if kind == FIFF.FIFF_DIG_POINT:
                 tag = read_tag(fid, pos)
-                pts.append(tag.data)
+                pts.append(DigPoint(tag.data))
             elif kind == FIFF.FIFF_MNE_COORD_FRAME:
                 tag = read_tag(fid, pos)
                 coord_frame = tag.data[0]
+                coord_frame = _coord_frame_named.get(coord_frame, coord_frame)
 
     # coord_frame is not stored in the tag
     for pt in pts:
@@ -1742,11 +1741,11 @@ def write_info(fname, info, data_type=None, reset_range=True):
     reset_range : bool
         If True, info['chs'][k]['range'] will be set to unity.
     """
-    fid = start_file(fname)
-    start_block(fid, FIFF.FIFFB_MEAS)
-    write_meas_info(fid, info, data_type, reset_range)
-    end_block(fid, FIFF.FIFFB_MEAS)
-    end_file(fid)
+    with start_file(fname) as fid:
+        start_block(fid, FIFF.FIFFB_MEAS)
+        write_meas_info(fid, info, data_type, reset_range)
+        end_block(fid, FIFF.FIFFB_MEAS)
+        end_file(fid)
 
 
 @verbose
@@ -2008,8 +2007,9 @@ def create_info(ch_names, sfreq, ch_types='misc', verbose=None):
                            % (list(_kind_dict.keys()), kind))
         kind = _kind_dict[kind]
         # mirror what tag.py does here
-        coord_frame = _coord_dict.get(kind[0], FIFF.FIFFV_COORD_UNKNOWN)
-        chan_info = dict(loc=np.full(12, np.nan), unit_mul=0, range=1., cal=1.,
+        coord_frame = _ch_coord_dict.get(kind[0], FIFF.FIFFV_COORD_UNKNOWN)
+        chan_info = dict(loc=np.full(12, np.nan),
+                         unit_mul=FIFF.FIFF_UNITM_NONE, range=1., cal=1.,
                          kind=kind[0], coil_type=kind[1],
                          unit=kind[2], coord_frame=coord_frame,
                          ch_name=str(name), scanno=ci + 1, logno=ci + 1)
@@ -2108,48 +2108,17 @@ def anonymize_info(info, daysback=None, keep_his=False, verbose=None):
     ----------
     info : dict, instance of Info
         Measurement information for the dataset.
-    daysback : int | None
-        Number of days to subtract from all dates.
-        If None (default) the date of service will be set to Jan 1ˢᵗ 2000.
-        This parameter is ignored if ``info['meas_date'] is None``.
-    keep_his : bool
-        If True his_id of subject_info will NOT be overwritten.
-        Defaults to False.
-
-        .. warning:: This could mean that ``info`` is not fully
-                     anonymized. Use with caution.
+    %(anonymize_info_parameters)s
     %(verbose)s
 
     Returns
     -------
     info : instance of Info
-        Measurement information for the dataset.
+        The anonymized measurement information.
 
     Notes
     -----
-    Removes potentially identifying information if it exist in ``info``.
-    Specifically for each of the following we use:
-
-    - meas_date, file_id, meas_id
-          A default value, or as specified by ``daysback``.
-    - subject_info
-          Default values, except for 'birthday' which is adjusted
-          to maintain the subject age.
-    - experimenter, proj_name, description
-          Default strings.
-    - utc_offset
-          ``None``.
-    - proj_id
-          Zeros.
-    - proc_history
-          Dates use the meas_date logic, and experimenter a default string.
-    - helium_info, device_info
-          Dates use the meas_date logic, meta info uses defaults.
-
-    If ``info['meas_date']`` is None, it will remain None during processing
-    the above fields.
-
-    Operates in place.
+    %(anonymize_info_notes)s
     """
     _validate_type(info, 'info', "self")
 

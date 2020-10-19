@@ -14,12 +14,11 @@ from mne import (convert_forward_solution, read_forward_solution, compute_rank,
                  VolVectorSourceEstimate, VolSourceEstimate, EvokedArray,
                  pick_channels_cov)
 from mne.beamformer import (make_lcmv, apply_lcmv, apply_lcmv_epochs,
-                            apply_lcmv_raw, tf_lcmv, Beamformer,
-                            read_beamformer, apply_lcmv_cov)
+                            apply_lcmv_raw, Beamformer,
+                            read_beamformer, apply_lcmv_cov, make_dics)
 from mne.beamformer._compute_beamformer import _prepare_beamformer_input
-from mne.beamformer._lcmv import _lcmv_source_power
 from mne.datasets import testing
-from mne.fixes import nullcontext
+from mne.fixes import _get_args
 from mne.io.compensator import set_current_comp
 from mne.minimum_norm import make_inverse_operator, apply_inverse
 from mne.simulation import simulate_evoked
@@ -295,7 +294,7 @@ def test_make_lcmv(tmpdir, reg, proj):
 
     # __repr__
     assert len(evoked.ch_names) == 22
-    assert len(evoked.info['projs']) == (4 if proj else 0)
+    assert len(evoked.info['projs']) == (3 if proj else 0)
     assert len(evoked.info['bads']) == 2
     rank = 17 if proj else 20
     assert 'LCMV' in repr(filters)
@@ -532,177 +531,6 @@ def test_lcmv_cov(weight_norm, pick_ori):
         assert_allclose(data, stc.data, rtol=1e-12)
 
 
-@testing.requires_testing_data
-def test_lcmv_source_power():
-    """Test LCMV source power computation."""
-    raw, epochs, evoked, data_cov, noise_cov, label, forward,\
-        forward_surf_ori, forward_fixed, forward_vol = _get_data()
-
-    stc_source_power = _lcmv_source_power(epochs.info, forward, noise_cov,
-                                          data_cov, label=label,
-                                          weight_norm='unit-noise-gain')
-
-    max_source_idx = np.argmax(stc_source_power.data)
-    max_source_power = np.max(stc_source_power.data)
-
-    assert max_source_idx == 0, max_source_idx
-    assert 0.4 < max_source_power < 2.4, max_source_power
-
-    # Test picking normal orientation and using a list of CSD matrices
-    stc_normal = _lcmv_source_power(
-        epochs.info, forward_surf_ori, noise_cov, data_cov,
-        pick_ori="normal", label=label, weight_norm='unit-noise-gain')
-
-    # The normal orientation results should always be smaller than free
-    # orientation results
-    assert (np.abs(stc_normal.data[:, 0]) <= stc_source_power.data[:, 0]).all()
-
-    # Test if fixed forward operator is detected when picking normal
-    # orientation
-    pytest.raises(ValueError, _lcmv_source_power, raw.info, forward_fixed,
-                  noise_cov, data_cov, pick_ori="normal")
-
-    # Test if non-surface oriented forward operator is detected when picking
-    # normal orientation
-    pytest.raises(ValueError, _lcmv_source_power, raw.info, forward, noise_cov,
-                  data_cov, pick_ori="normal")
-
-    # Test if volume forward operator is detected when picking normal
-    # orientation
-    pytest.raises(ValueError, _lcmv_source_power, epochs.info, forward_vol,
-                  noise_cov, data_cov, pick_ori="normal")
-
-
-@testing.requires_testing_data
-@pytest.mark.filterwarnings('ignore:.*tf_lcmv is dep.*:DeprecationWarning')
-def test_tf_lcmv():
-    """Test TF beamforming based on LCMV."""
-    label = mne.read_label(fname_label)
-    events = mne.read_events(fname_event)
-    raw = mne.io.read_raw_fif(fname_raw, preload=True)
-    forward = mne.read_forward_solution(fname_fwd)
-
-    event_id, tmin, tmax = 1, -0.2, 0.2
-
-    # Setup for reading the raw data
-    raw.info['bads'] = ['MEG 2443', 'EEG 053']  # 2 bads channels
-
-    # Set up pick list: MEG - bad channels
-    left_temporal_channels = mne.read_selection('Left-temporal')
-    picks = mne.pick_types(raw.info, meg=True,
-                           selection=left_temporal_channels)
-    picks = picks[::2]  # decimate for speed
-    raw.pick_channels([raw.ch_names[ii] for ii in picks])
-    raw.info.normalize_proj()  # avoid projection warnings
-    del picks
-
-    # Read epochs
-    epochs = mne.Epochs(raw, events, event_id, tmin, tmax, proj=True,
-                        baseline=None, preload=False, reject=reject)
-    epochs.load_data()
-
-    freq_bins = [(4, 12), (15, 40)]
-    time_windows = [(-0.1, 0.1), (0.0, 0.2)]
-    win_lengths = [0.2, 0.2]
-    tstep = 0.1
-    reg = 0.05
-
-    source_power = []
-    noise_covs = []
-    for (l_freq, h_freq), win_length in zip(freq_bins, win_lengths):
-        raw_band = raw.copy()
-        raw_band.filter(l_freq, h_freq, method='iir', n_jobs=1,
-                        iir_params=dict(output='ba'))
-        epochs_band = mne.Epochs(
-            raw_band, epochs.events, epochs.event_id, tmin=tmin, tmax=tmax,
-            baseline=None, proj=True)
-        noise_cov = mne.compute_covariance(
-            epochs_band, tmin=tmin, tmax=tmin + win_length)
-        noise_cov = mne.cov.regularize(
-            noise_cov, epochs_band.info, mag=reg, grad=reg, eeg=reg,
-            proj=True, rank=None)
-        noise_covs.append(noise_cov)
-        del raw_band  # to save memory
-
-        # Manually calculating source power in on frequency band and several
-        # time windows to compare to tf_lcmv results and test overlapping
-        if (l_freq, h_freq) == freq_bins[0]:
-            for time_window in time_windows:
-                data_cov = mne.compute_covariance(
-                    epochs_band, tmin=time_window[0], tmax=time_window[1])
-                stc_source_power = _lcmv_source_power(
-                    epochs.info, forward, noise_cov, data_cov,
-                    reg=reg, label=label, weight_norm='unit-noise-gain')
-                source_power.append(stc_source_power.data)
-
-    pytest.raises(ValueError, tf_lcmv, epochs, forward, noise_covs, tmin, tmax,
-                  tstep, win_lengths, freq_bins, reg=reg, label=label)
-    stcs = tf_lcmv(epochs, forward, noise_covs, tmin, tmax, tstep,
-                   win_lengths, freq_bins, reg=reg, label=label, raw=raw)
-
-    assert (len(stcs) == len(freq_bins))
-    assert (stcs[0].shape[1] == 4)
-
-    # Averaging all time windows that overlap the time period 0 to 100 ms
-    source_power = np.mean(source_power, axis=0)
-
-    # Selecting the first frequency bin in tf_lcmv results
-    stc = stcs[0]
-
-    # Comparing tf_lcmv results with _lcmv_source_power results
-    assert_array_almost_equal(stc.data[:, 2], source_power[:, 0])
-
-    # Test if using unsupported max-power orientation is detected
-    pytest.raises(ValueError, tf_lcmv, epochs, forward, noise_covs, tmin, tmax,
-                  tstep, win_lengths, freq_bins=freq_bins,
-                  pick_ori='max-power')
-
-    # Test if incorrect number of noise CSDs is detected
-    # Test if incorrect number of noise covariances is detected
-    pytest.raises(ValueError, tf_lcmv, epochs, forward, [noise_covs[0]], tmin,
-                  tmax, tstep, win_lengths, freq_bins)
-
-    # Test if freq_bins and win_lengths incompatibility is detected
-    pytest.raises(ValueError, tf_lcmv, epochs, forward, noise_covs, tmin, tmax,
-                  tstep, win_lengths=[0, 1, 2], freq_bins=freq_bins)
-
-    # Test if time step exceeding window lengths is detected
-    pytest.raises(ValueError, tf_lcmv, epochs, forward, noise_covs, tmin, tmax,
-                  tstep=0.15, win_lengths=[0.2, 0.1], freq_bins=freq_bins)
-
-    # Test if missing of noise covariance matrix is detected when more than
-    # one channel type is present in the data
-    pytest.raises(ValueError, tf_lcmv, epochs, forward, noise_covs=None,
-                  tmin=tmin, tmax=tmax, tstep=tstep, win_lengths=win_lengths,
-                  freq_bins=freq_bins)
-
-    # Test if unsupported weight normalization specification is detected
-    pytest.raises(ValueError, tf_lcmv, epochs, forward, noise_covs, tmin, tmax,
-                  tstep, win_lengths, freq_bins, weight_norm='nai')
-
-    # Test unsupported pick_ori (vector not supported here)
-    with pytest.raises(ValueError, match='pick_ori'):
-        tf_lcmv(epochs, forward, noise_covs, tmin, tmax, tstep, win_lengths,
-                freq_bins, pick_ori='vector')
-    # Test correct detection of preloaded epochs objects that do not contain
-    # the underlying raw object
-    epochs_preloaded = mne.Epochs(raw, events, event_id, tmin, tmax, proj=True,
-                                  baseline=(None, 0), preload=True)
-    epochs_preloaded._raw = None
-    pytest.raises(ValueError, tf_lcmv, epochs_preloaded, forward,
-                  noise_covs, tmin, tmax, tstep, win_lengths, freq_bins)
-
-    # Pass only one epoch to test if subtracting evoked
-    # responses yields zeros
-    with pytest.warns(RuntimeWarning,
-                      match='Too few samples .* estimate may be unreliable'):
-        stcs = tf_lcmv(epochs[0], forward, noise_covs, tmin, tmax, tstep,
-                       win_lengths, freq_bins, subtract_evoked=True, reg=reg,
-                       label=label, raw=raw)
-
-    assert_array_almost_equal(stcs[0].data, np.zeros_like(stcs[0].data))
-
-
 @pytest.mark.slowtest
 @testing.requires_testing_data
 def test_lcmv_ctf_comp():
@@ -819,7 +647,7 @@ def test_lcmv_reg_proj(proj, weight_norm):
     (0.05, 'unit-noise-gain', False, None, 83, 86),
     (0.05, 'unit-noise-gain', False, 0.8, 83, 86),  # depth same for wn != None
     # no reg
-    (0.00, 'unit-noise-gain', True, None, 63, 96),  # TODO: Still not stable
+    (0.00, 'unit-noise-gain', True, None, 45, 99),  # TODO: Still not stable
 ])
 def test_localization_bias_fixed(bias_params_fixed, reg, weight_norm, use_cov,
                                  depth, lower, upper):
@@ -840,23 +668,26 @@ def test_localization_bias_fixed(bias_params_fixed, reg, weight_norm, use_cov,
 
 @pytest.mark.parametrize(
     'reg, pick_ori, weight_norm, use_cov, depth, lower, upper', [
-        (0.05, 'vector', 'sqrtm', False, None, 26, 28),
-        (0.05, 'vector', 'sqrtm', True, None, 40, 42),
+        (0.05, 'vector', 'unit-noise-gain-invariant', False, None, 26, 28),
+        (0.05, 'vector', 'unit-noise-gain-invariant', True, None, 40, 42),
         (0.05, 'vector', 'unit-noise-gain', False, None, 13, 14),
         (0.05, 'vector', 'unit-noise-gain', True, None, 35, 37),
         (0.05, 'vector', 'nai', True, None, 35, 37),
         (0.05, 'vector', None, True, None, 12, 14),
         (0.05, 'vector', None, True, 0.8, 39, 43),
+        (0.05, 'max-power', 'unit-noise-gain-invariant', False, None, 17, 20),
         (0.05, 'max-power', 'unit-noise-gain', False, None, 17, 20),
         (0.05, 'max-power', 'nai', True, None, 21, 24),
         (0.05, 'max-power', None, True, None, 7, 10),
         (0.05, 'max-power', None, True, 0.8, 15, 18),
         (0.05, None, None, True, 0.8, 40, 42),
         # no reg
-        (0.00, 'vector', None, True, None, 24, 32),
-        (0.00, 'vector', 'unit-noise-gain', True, None, 52, 65),
-        (0.00, 'vector', 'nai', True, None, 52, 65),
+        (0.00, 'vector', None, True, None, 21, 32),
+        (0.00, 'vector', 'unit-noise-gain-invariant', True, None, 50, 65),
+        (0.00, 'vector', 'unit-noise-gain', True, None, 42, 65),
+        (0.00, 'vector', 'nai', True, None, 42, 65),
         (0.00, 'max-power', None, True, None, 15, 19),
+        (0.00, 'max-power', 'unit-noise-gain-invariant', True, None, 43, 50),
         (0.00, 'max-power', 'unit-noise-gain', True, None, 43, 50),
         (0.00, 'max-power', 'nai', True, None, 43, 50),
     ])
@@ -915,7 +746,8 @@ def test_lcmv_maxfiltered():
 
 @testing.requires_testing_data
 @pytest.mark.parametrize('pick_ori', ['vector', 'max-power', 'normal'])
-@pytest.mark.parametrize('weight_norm', ['unit-noise-gain', 'nai', 'sqrtm'])
+@pytest.mark.parametrize(
+    'weight_norm', ['unit-noise-gain', 'nai', 'unit-noise-gain-invariant'])
 @pytest.mark.parametrize('reg', (0.05, 0.))
 @pytest.mark.parametrize('inversion', ['matrix', 'single'])
 def test_unit_noise_gain_formula(pick_ori, weight_norm, reg, inversion):
@@ -931,10 +763,14 @@ def test_unit_noise_gain_formula(pick_ori, weight_norm, reg, inversion):
     forward = mne.read_forward_solution(fname_fwd)
     convert_forward_solution(forward, surf_ori=True, copy=False)
     rank = None
-    filters = make_lcmv(epochs.info, forward, data_cov, reg=reg,
-                        noise_cov=noise_cov, pick_ori=pick_ori,
-                        weight_norm=weight_norm, rank=rank,
-                        inversion=inversion)
+    kwargs = dict(reg=reg, noise_cov=noise_cov, pick_ori=pick_ori,
+                  weight_norm=weight_norm, rank=rank, inversion=inversion)
+    if inversion == 'single' and pick_ori == 'vector' and \
+            weight_norm == 'unit-noise-gain-invariant':
+        with pytest.raises(ValueError, match='Cannot use'):
+            make_lcmv(epochs.info, forward, data_cov, **kwargs)
+        return
+    filters = make_lcmv(epochs.info, forward, data_cov, **kwargs)
     _, _, _, _, G, _, _, _ = _prepare_beamformer_input(
         epochs.info, forward, None, 'vector', noise_cov=noise_cov, rank=rank,
         pca=False, exp=None)
@@ -1003,9 +839,19 @@ def _assert_weight_norm(filters, G):
         assert_allclose(got, desired, atol=atol, err_msg='w @ w.conj().T = I')
 
         # Check that the result here is a diagonal matrix for Sekihara
-        if n_orient > 1 and weight_norm != 'sqrtm':
+        if n_orient > 1 and weight_norm != 'unit-noise-gain-invariant':
             got = w @ use_G.swapaxes(-2, -1)
             diags = np.diagonal(got, 0, -2, -1)
             want = np.apply_along_axis(np.diagflat, 1, diags)
             atol = np.mean(diags).real * 1e-12
             assert_allclose(got, want, atol=atol, err_msg='G.T @ w = θI')
+
+
+def test_api():
+    """Test LCMV/DICS API equivalence."""
+    lcmv_names = _get_args(make_lcmv)
+    dics_names = _get_args(make_dics)
+    dics_names[dics_names.index('csd')] = 'data_cov'
+    dics_names[dics_names.index('noise_csd')] = 'noise_cov'
+    dics_names.pop(dics_names.index('real_filter'))  # not a thing for LCMV
+    assert lcmv_names == dics_names

@@ -10,7 +10,7 @@ from scipy import fftpack
 # XXX explore cuda optimization at some point.
 
 from ..io.pick import _pick_data_channels, pick_info
-from ..utils import verbose, warn, fill_doc
+from ..utils import verbose, warn, fill_doc, _validate_type
 from ..parallel import parallel_func, check_n_jobs
 from .tfr import AverageTFR, _get_data
 
@@ -103,13 +103,16 @@ def tfr_array_stockwell(data, sfreq, fmin=None, fmax=None, n_fft=None,
                         width=1.0, decim=1, return_itc=False, n_jobs=1):
     """Compute power and intertrial coherence using Stockwell (S) transform.
 
-    See [1]_, [2]_, [3]_, [4]_ for more information.
+    Same computation as `~mne.time_frequency.tfr_stockwell`, but operates on
+    :class:`NumPy arrays <numpy.ndarray>` instead of `~mne.Epochs` objects.
+
+    See :footcite:`Stockwell2007,MoukademEtAl2014,WheatEtAl2010,JonesEtAl2006`
+    for more information.
 
     Parameters
     ----------
-    data : ndarray
-        The signal to transform. Any dimensionality supported as long
-        as the last dimension is time.
+    data : ndarray, shape (n_epochs, n_channels, n_times)
+        The signal to transform.
     sfreq : float
         The sampling frequency.
     fmin : None, float
@@ -150,26 +153,15 @@ def tfr_array_stockwell(data, sfreq, fmin=None, fmax=None, n_fft=None,
 
     References
     ----------
-    .. [1] Stockwell, R. G. "Why use the S-transform." AMS Pseudo-differential
-       operators: Partial differential equations and time-frequency
-       analysis 52 (2007): 279-309.
-    .. [2] Moukadem, A., Bouguila, Z., Abdeslam, D. O, and Dieterlen, A.
-       Stockwell transform optimization applied on the detection of split in
-       heart sounds (2014). Signal Processing Conference (EUSIPCO), 2013
-       Proceedings of the 22nd European, pages 2015--2019.
-    .. [3] Wheat, K., Cornelissen, P. L., Frost, S.J, and Peter C. Hansen
-       (2010). During Visual Word Recognition, Phonology Is Accessed
-       within 100 ms and May Be Mediated by a Speech Production
-       Code: Evidence from Magnetoencephalography. The Journal of
-       Neuroscience, 30 (15), 5229-5233.
-    .. [4] K. A. Jones and B. Porjesz and D. Chorlian and M. Rangaswamy and C.
-       Kamarajan and A. Padmanabhapillai and A. Stimus and H. Begleiter
-       (2006). S-transform time-frequency analysis of P300 reveals deficits in
-       individuals diagnosed with alcoholism.
-       Clinical Neurophysiology 117 2128--2143
+    .. footbibliography::
     """
+    _validate_type(data, np.ndarray, 'data')
+    if data.ndim != 3:
+        raise ValueError(
+            'data must be 3D with shape (n_epochs, n_channels, n_times), '
+            f'got {data.shape}')
     n_epochs, n_channels = data.shape[:2]
-    n_out = data.shape[2] // decim + bool(data.shape[2] % decim)
+    n_out = data.shape[2] // decim + bool(data.shape[-1] % decim)
     data, n_fft_, zero_pad = _check_input_st(data, n_fft)
 
     freqs = fftpack.fftfreq(n_fft_, 1. / sfreq)
@@ -203,7 +195,13 @@ def tfr_array_stockwell(data, sfreq, fmin=None, fmax=None, n_fft=None,
 def tfr_stockwell(inst, fmin=None, fmax=None, n_fft=None,
                   width=1.0, decim=1, return_itc=False, n_jobs=1,
                   verbose=None):
-    """Time-Frequency Representation (TFR) using Stockwell Transform.
+    """Compute Time-Frequency Representation (TFR) using Stockwell Transform.
+
+    Same computation as `~mne.time_frequency.tfr_array_stockwell`, but operates
+    on `~mne.Epochs` objects instead of :class:`NumPy arrays <numpy.ndarray>`.
+
+    See :footcite:`Stockwell2007,MoukademEtAl2014,WheatEtAl2010,JonesEtAl2006`
+    for more information.
 
     Parameters
     ----------
@@ -247,6 +245,10 @@ def tfr_stockwell(inst, fmin=None, fmax=None, n_fft=None,
     Notes
     -----
     .. versionadded:: 0.9.0
+
+    References
+    ----------
+    .. footbibliography::
     """
     # verbose dec is used b/c subfunctions are verbose
     data = _get_data(inst, return_itc)

@@ -222,6 +222,11 @@ def test_calculate_chpi_positions_vv():
     mf_quats = read_head_pos(pos_fname)
     raw = read_raw_fif(chpi_fif_fname, allow_maxshield='yes')
     raw.crop(0, 5).load_data()
+    # check "auto" t_window estimation at full sampling rate
+    with catch_logging() as log:
+        compute_chpi_amplitudes(raw, t_step_min=0.1, t_window='auto',
+                                tmin=0, tmax=2, verbose=True)
+    assert '83.3 ms' in log.getvalue()
     # This is a little hack (aliasing while decimating) to make it much faster
     # for testing purposes only. We can relax this later if we find it breaks
     # something.
@@ -234,7 +239,6 @@ def test_calculate_chpi_positions_vv():
     assert '\nHPIFIT' in log
     assert 'Computing 4385 HPI location guesses' in log
     _assert_quats(py_quats, mf_quats, dist_tol=0.001, angle_tol=0.7)
-
     # degenerate conditions
     raw_no_chpi = read_raw_fif(sample_fname)
     with pytest.raises(RuntimeError, match='cHPI information not found'):
@@ -527,8 +531,9 @@ def test_chpi_subtraction_filter_chpi():
     raw_orig = raw.copy().crop(0, 16)
     with catch_logging() as log:
         filter_chpi(raw, include_line=False, t_window=0.2, verbose=True)
-    assert 'No average EEG' not in log.getvalue()
-    assert '5 cHPI' in log.getvalue()
+    log = log.getvalue()
+    assert 'No average EEG' not in log
+    assert '5 cHPI' in log
     # MaxFilter doesn't do quite as well as our algorithm with the last bit
     raw.crop(0, 16)
     # remove cHPI status chans

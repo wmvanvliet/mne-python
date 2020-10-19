@@ -29,6 +29,9 @@ class _NoCloseRead(object):
     def __exit__(self, type_, value, traceback):
         return
 
+    def close(self):
+        return
+
     def seek(self, offset, whence=SEEK_SET):
         return self.fid.seek(offset, whence)
 
@@ -77,15 +80,17 @@ def _get_next_fname(fid, fname, tree):
                 path, base = op.split(fname)
                 idx = base.find('.')
                 idx2 = base.rfind('-')
+                num_str = base[idx2 + 1:idx]
+                if not num_str.isdigit():
+                    idx2 = -1
+
                 if idx2 < 0 and next_num == 1:
                     # this is the first file, which may not be numbered
                     next_fname = op.join(
                         path, '%s-%d.%s' % (base[:idx], next_num,
                                             base[idx + 1:]))
                     continue
-                num_str = base[idx2 + 1:idx]
-                if not num_str.isdigit():
-                    continue
+
                 next_fname = op.join(path, '%s-%d.%s'
                                      % (base[:idx2], next_num, base[idx + 1:]))
         if next_fname is not None:
@@ -118,6 +123,14 @@ def fiff_open(fname, preload=False, verbose=None):
         A list of tags.
     """
     fid = _fiff_get_fid(fname)
+    try:
+        return _fiff_open(fname, fid, preload)
+    except Exception:
+        fid.close()
+        raise
+
+
+def _fiff_open(fname, fid, preload):
     # do preloading of entire file
     if preload:
         # note that StringIO objects instantiated this way are read-only,

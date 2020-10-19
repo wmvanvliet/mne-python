@@ -78,15 +78,16 @@ def _mult_cal_one(data_view, one, idx, cals, mult):
     one = np.asarray(one, dtype=data_view.dtype)
     assert data_view.shape[1] == one.shape[1]
     if mult is not None:
-        data_view[:] = np.dot(mult, one)
+        mult.ndim == one.ndim == 2
+        data_view[:] = mult @ one[idx]
     else:
+        assert cals is not None
         if isinstance(idx, slice):
             data_view[:] = one[idx]
         else:
             # faster than doing one = one[idx]
             np.take(one, idx, axis=0, out=data_view)
-        if cals is not None:
-            data_view *= cals
+        data_view *= cals
 
 
 def _blk_read_lims(start, stop, buf_len):
@@ -263,8 +264,7 @@ def _create_chs(ch_names, cals, ch_coil, ch_kind, eog, ecg, emg, misc):
 
         chan_info = {'cal': cals[idx], 'logno': idx + 1, 'scanno': idx + 1,
                      'range': 1.0, 'unit_mul': FIFF.FIFF_UNITM_NONE,
-                     'ch_name': ch_name,
-                     'unit': FIFF.FIFF_UNIT_V,
+                     'ch_name': ch_name, 'unit': FIFF.FIFF_UNIT_V,
                      'coord_frame': FIFF.FIFFV_COORD_HEAD,
                      'coil_type': coil_type, 'kind': kind, 'loc': np.zeros(12)}
         chs.append(chan_info)

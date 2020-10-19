@@ -2,6 +2,7 @@
 #
 # License: BSD (3-clause)
 
+from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 import os.path as op
 import re
@@ -249,7 +250,7 @@ class Annotations(object):
             out_keys = ('onset', 'duration', 'description', 'orig_time')
             out_vals = (self.onset[key], self.duration[key],
                         self.description[key], self.orig_time)
-            return dict(zip(out_keys, out_vals))
+            return OrderedDict(zip(out_keys, out_vals))
         else:
             key = list(key) if isinstance(key, tuple) else key
             return Annotations(onset=self.onset[key],
@@ -1008,8 +1009,9 @@ def events_from_annotations(raw, event_id="auto",
 
     if chunk_duration is None:
         inds = raw.time_as_index(annotations.onset, use_rounding=use_rounding,
-                                 origin=annotations.orig_time) + raw.first_samp
-
+                                 origin=annotations.orig_time)
+        if annotations.orig_time is not None:
+            inds += raw.first_samp
         values = [event_id_[kk] for kk in annotations.description[event_sel]]
         inds = inds[event_sel]
     else:

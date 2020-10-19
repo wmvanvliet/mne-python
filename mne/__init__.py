@@ -60,7 +60,7 @@ from .source_estimate import (read_source_estimate,
                               spatio_temporal_src_adjacency,
                               spatio_temporal_tris_adjacency,
                               spatio_temporal_dist_adjacency,
-                              extract_label_time_course)
+                              extract_label_time_course, stc_near_sensors)
 from .surface import (read_surface, write_surface, decimate_surface, read_tri,
                       read_morph_map, get_head_surf, get_meg_helmet_surf,
                       dig_mri_distances)
@@ -117,26 +117,10 @@ from . import minimum_norm
 from . import preprocessing
 from . import simulation
 from . import stats
+from . import surface
 from . import time_frequency
 from . import viz
 from . import decoding
-
-from .utils import deprecated_alias
-deprecated_alias(
-    'spatial_src_connectivity', spatial_src_adjacency)
-deprecated_alias(
-    'spatial_tris_connectivity', spatial_tris_adjacency)
-deprecated_alias(
-    'spatial_dist_connectivity', spatial_dist_adjacency)
-deprecated_alias(
-    'spatial_inter_hemi_connectivity', spatial_inter_hemi_adjacency)
-deprecated_alias(
-    'spatio_temporal_src_connectivity', spatio_temporal_src_adjacency)
-deprecated_alias(
-    'spatio_temporal_tris_connectivity', spatio_temporal_tris_adjacency)
-deprecated_alias(
-    'spatio_temporal_dist_connectivity', spatio_temporal_dist_adjacency)
-del deprecated_alias
 
 # initialize logging
 set_log_level(None, False)

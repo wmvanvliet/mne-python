@@ -314,11 +314,6 @@ def test_plot_psd_epochs():
     # test plot_psd_topomap errors
     with pytest.raises(RuntimeError, match='No frequencies in band'):
         epochs.plot_psd_topomap(bands=[(0, 0.01, 'foo')])
-    # test vmin, vmax deprecation
-    with pytest.warns(DeprecationWarning, match='you didn\'t specify "vlim"'):
-        epochs.plot_psd_topomap(vmax=5)
-    with pytest.warns(DeprecationWarning, match='provided values for "vlim"'):
-        epochs.plot_psd_topomap(vmax=5, vlim=(None, 7))
     plt.close('all')
     # test defaults
     fig = epochs.plot_psd_topomap()
@@ -337,6 +332,14 @@ def test_plot_psd_epochs():
     for dB in [True, False]:
         with pytest.warns(UserWarning, match=err_str):
             epochs.plot_psd(dB=dB)
+    plt.close('all')
+
+
+def test_plot_psdtopo_nirs(fnirs_epochs):
+    """Test plotting of PSD topography for nirs data."""
+    bands = [(0.2, '0.2 Hz'), (0.4, '0.4 Hz'), (0.8, '0.8 Hz')]
+    fig = fnirs_epochs.plot_psd_topomap(bands=bands)
+    assert len(fig.axes) == 6  # 3 band x (plot + cmap)
     plt.close('all')
 
 
