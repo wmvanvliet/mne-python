@@ -105,7 +105,7 @@ def estimate_slice_duration(events, slice_event_id):
     events : ndarray, shape (n_events, 3)
         The events as for example produced by :func:`mne.find_events`.
     slice_event_id : int
-        The event emitted when a new slice begins.
+        The event code marking when a new slice begins.
 
     Returns
     -------
