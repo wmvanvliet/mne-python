@@ -1,5 +1,4 @@
 from ..utils import verbose, _check_preload, logger
-from ..io.pick import _picks_to_idx
 
 import numpy as np
 
