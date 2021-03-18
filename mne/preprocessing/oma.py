@@ -49,6 +49,10 @@ def fix_grad_artifact(raw, n_iter, n_cascades, slice_duration='auto',
     Make sure there are no slow drifts in the signal before using this
     function. Slow drifts may be removed from example by highpass filtering the
     data.
+
+    See also
+    --------
+    estimate_slice_duration
     """
     _check_preload(raw, 'fix_grad_artifact')
     if copy:
@@ -116,6 +120,10 @@ def estimate_slice_duration(events, slice_event_id):
     -----
     This function will fail if the median time difference between consecutive
     slice events is not a good estimate of the slice duration.
+
+    See also
+    --------
+    fix_grad_artifact
     """
     onsets = events[events[:, 2] == slice_event_id][:, 0]
     deltas = np.diff(onsets)
