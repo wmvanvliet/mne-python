@@ -1,6 +1,5 @@
 from ..utils import verbose, _check_preload, logger
 from ..io.pick import _picks_to_idx
-from ..parallel import parallel_func
 
 import numpy as np
 
@@ -29,7 +28,7 @@ def fix_grad_artifact(raw, n_iter, n_cascades, slice_duration='auto',
         Slice duration in samples - default to Auto. Note that this doesn't
         need to be an integer value.
     TR : float | 'auto'
-        Repetition time between two volumes in seconds - defaults to Auto. 
+        Repetition time between two volumes in seconds - defaults to Auto.
     %(picks_base)s all EEG channels.
     copy : bool
         Wether to make a copy of the data or operate in place.
@@ -53,50 +52,43 @@ def fix_grad_artifact(raw, n_iter, n_cascades, slice_duration='auto',
     data.
     """
     _check_preload(raw, 'fix_grad_artifact')
-    picks = _picks_to_idx(raw.info, picks, 'eeg', exclude=('bads'))
     if copy:
         raw = raw.copy()
-    
+
     def OMA(M):
-        # The filter is described in formula 12, 15 and 16 in the paper.
-        # In order to transcribe these formulas directly into python code, we set up
-        # the variables used in the formulas first.
+        # The filter is described in formula 12, 15 and 16 in the paper.  In
+        # order to transcribe these formulas directly into python code, we set
+        # up the variables used in the formulas first.
         N = len(raw.times)
         k = np.arange(N)
         z = np.exp(1j * 2 * np.pi * k / N)
-
         J = n_iter
         L = n_cascades
-        
+
         # Formula 12
-        filt = (1 / M**2) * (1 - z**(-M)) * (1 - z**M) / ((1 - z**(-1)) * (1 - z))
-        filt[z == 1+0j] = 0  # fix divide by zero cases
-        
+        filt = (1 / M**2) * (1 - z**(-M)) * (1 - z**M) / ((1 - z**(-1)) * (1 - z))  # noqa
+        filt[z == 1 + 0j] = 0  # fix divide by zero cases
+
         # Formula 15
         filt = 1 - (1 - filt) ** J
-        
+
         # Formula 16
         filt = filt ** L
         return filt
-    
+
     logger.info(f'Computing OMA filter using {n_iter} iterations and '
                 f'{n_cascades} cascades...')
     filt = OMA(slice_duration)
     filt *= OMA(TR)
 
-    def filt_channel(channel):
+    def apply_filter(signal):
         """Apply the filter to a single channel."""
-        signal = raw._data[channel]
         signal_fft = np.fft.fft(signal)
         signal_fft = filt * signal_fft
-        signal = np.fft.ifft(signal_fft)
-        raw._data[channel] = signal
+        return np.fft.ifft(signal_fft)
 
-    # FIXME: parallelization is broken
-    parallel, my_filt_func, _ = parallel_func(filt_channel, n_jobs=1,
-                                              verbose=verbose)
-    parallel(my_filt_func(channel) for channel in picks)
-
+    raw.apply_function(apply_filter, picks=picks, n_jobs=n_jobs,
+                       verbose=verbose)
     return raw
 
 
