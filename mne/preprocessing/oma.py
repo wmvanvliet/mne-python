@@ -69,8 +69,10 @@ def fix_grad_artifact(raw, n_iter, n_cascades, slice_duration='auto',
         L = n_cascades
 
         # Formula 12
-        filt = (1 / M**2) * (1 - z**(-M)) * (1 - z**M) / ((1 - z**(-1)) * (1 - z))  # noqa
-        filt[z == 1 + 0j] = 0  # fix divide by zero cases
+        numer = (1 / M**2) * (1 - z**(-M)) * (1 - z**M)
+        denom = (1 - z**(-1)) * (1 - z)
+        denom[denom == 0] = 1  # fix divide by zero cases
+        filt = numer / denom
 
         # Formula 15
         filt = 1 - (1 - filt) ** J
@@ -88,7 +90,8 @@ def fix_grad_artifact(raw, n_iter, n_cascades, slice_duration='auto',
         """Apply the filter to a single channel."""
         signal_fft = np.fft.fft(signal)
         signal_fft = filt * signal_fft
-        return np.fft.ifft(signal_fft)
+        signal = np.fft.ifft(signal_fft)
+        return np.real(signal)
 
     raw.apply_function(apply_filter, picks=picks, n_jobs=n_jobs,
                        verbose=verbose)
