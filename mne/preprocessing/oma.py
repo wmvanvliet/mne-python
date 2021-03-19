@@ -58,11 +58,11 @@ def fix_grad_artifact(raw, n_iter, n_cascades, slice_duration='auto',
     if copy:
         raw = raw.copy()
 
-    def OMA(M):
+    def OMA(M, N):
         # The filter is described in formula 12, 15 and 16 in the paper.  In
         # order to transcribe these formulas directly into python code, we set
         # up the variables used in the formulas first.
-        N = len(raw.times)
+        #N = len(raw.times)
         k = np.arange(N)
         z = np.exp(1j * 2 * np.pi * k / N)
         J = n_iter
@@ -82,16 +82,29 @@ def fix_grad_artifact(raw, n_iter, n_cascades, slice_duration='auto',
         return filt
 
     logger.info(f'Computing OMA filter using {n_iter} iterations and '
-                f'{n_cascades} cascades...')
-    filt = OMA(slice_duration)
-    filt *= OMA(TR)
+                f'{n_cascades} cascades.')
+    logger.info(f'Slice duration: {slice_duration} samples')
+    logger.info(f'TR: {TR} samples')
+
+    # To deal with boundary issues, the signal (in frequency space) is padded
+    # with zeros.
+    from scipy.fft import next_fast_len
+    n_pad = int(slice_duration * raw.info['sfreq'])
+    logger.info(f'Padding with {n_pad} samples.')
+    shape = next_fast_len(len(raw.times) + n_pad)
+
+    filt = OMA(slice_duration, shape)
+    filt *= OMA(TR, shape)
 
     def apply_filter(signal):
         """Apply the filter to a single channel."""
+        pad_before = int(np.floor((shape - len(signal)) / 2))
+        pad_after = int(np.ceil((shape - len(signal)) / 2))
+        signal = np.pad(signal, (pad_before, pad_after), mode='symmetric')
         signal_fft = np.fft.fft(signal)
         signal_fft = filt * signal_fft
         signal = np.fft.ifft(signal_fft)
-        return np.real(signal)
+        return np.real(signal[pad_before:-pad_after])
 
     raw.apply_function(apply_filter, picks=picks, n_jobs=n_jobs,
                        verbose=verbose)
