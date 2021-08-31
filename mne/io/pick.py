@@ -3,7 +3,7 @@
 #          Matti Hämäläinen <msh@nmr.mgh.harvard.edu>
 #          Martin Luessi <mluessi@nmr.mgh.harvard.edu>
 #
-# License: BSD (3-clause)
+# License: BSD-3-Clause
 
 from copy import deepcopy
 import re
@@ -169,13 +169,13 @@ _second_rules = {
 }
 
 
+@fill_doc
 def channel_type(info, idx):
     """Get channel type.
 
     Parameters
     ----------
-    info : instance of Info
-        A measurement info object.
+    %(info_not_none)s
     idx : int
         Index of channel.
 
@@ -324,20 +324,20 @@ def _triage_fnirs_pick(ch, fnirs, warned):
     """Triage an fNIRS pick type."""
     if fnirs is True:
         return True
-    elif ch['coil_type'] == FIFF.FIFFV_COIL_FNIRS_HBO and fnirs == 'hbo':
+    elif ch['coil_type'] == FIFF.FIFFV_COIL_FNIRS_HBO and 'hbo' in fnirs:
         return True
-    elif ch['coil_type'] == FIFF.FIFFV_COIL_FNIRS_HBR and fnirs == 'hbr':
+    elif ch['coil_type'] == FIFF.FIFFV_COIL_FNIRS_HBR and 'hbr' in fnirs:
         return True
     elif ch['coil_type'] == FIFF.FIFFV_COIL_FNIRS_CW_AMPLITUDE and \
-            fnirs == 'fnirs_cw_amplitude':
+            'fnirs_cw_amplitude' in fnirs:
         return True
     elif ch['coil_type'] == FIFF.FIFFV_COIL_FNIRS_FD_AC_AMPLITUDE and \
-            fnirs == 'fnirs_fd_ac_amplitude':
+            'fnirs_fd_ac_amplitude' in fnirs:
         return True
     elif ch['coil_type'] == FIFF.FIFFV_COIL_FNIRS_FD_PHASE and \
-            fnirs == 'fnirs_fd_phase':
+            'fnirs_fd_phase' in fnirs:
         return True
-    elif ch['coil_type'] == FIFF.FIFFV_COIL_FNIRS_OD and fnirs == 'fnirs_od':
+    elif ch['coil_type'] == FIFF.FIFFV_COIL_FNIRS_OD and 'fnirs_od' in fnirs:
         return True
     return False
 
@@ -366,6 +366,7 @@ def _check_info_exclude(info, exclude):
     return exclude
 
 
+@fill_doc
 def pick_types(info, meg=False, eeg=False, stim=False, eog=False, ecg=False,
                emg=False, ref_meg='auto', misc=False, resp=False, chpi=False,
                exci=False, ias=False, syst=False, seeg=False, dipole=False,
@@ -375,8 +376,7 @@ def pick_types(info, meg=False, eeg=False, stim=False, eog=False, ecg=False,
 
     Parameters
     ----------
-    info : dict
-        The measurement info.
+    %(info_not_none)s
     meg : bool | str
         If True include MEG channels. If string it can be 'mag', 'grad',
         'planar1' or 'planar2' to select only magnetometers, all gradiometers,
@@ -514,8 +514,7 @@ def pick_info(info, sel=(), copy=True, verbose=None):
 
     Parameters
     ----------
-    info : dict
-        Info structure from evoked or raw data.
+    %(info_not_none)s
     sel : list of int | None
         Indices of channels to include. If None, all channels
         are included.
@@ -759,8 +758,7 @@ def channel_indices_by_type(info, picks=None):
 
     Parameters
     ----------
-    info : instance of Info
-        A measurement info object.
+    %(info_not_none)s
     %(picks_all)s
 
     Returns
@@ -844,13 +842,13 @@ def _mag_grad_dependent(info):
                for ph in info.get('proc_history', []))
 
 
+@fill_doc
 def _contains_ch_type(info, ch_type):
     """Check whether a certain channel type is in an info object.
 
     Parameters
     ----------
-    info : instance of Info
-        The measurement information.
+    %(info_not_none)s
     ch_type : str
         the channel type to be checked for
 
@@ -873,13 +871,13 @@ def _contains_ch_type(info, ch_type):
                for ii in range(info['nchan']))
 
 
+@fill_doc
 def _picks_by_type(info, meg_combined=False, ref_meg=False, exclude='bads'):
     """Get data channel indices as separate list of tuples.
 
     Parameters
     ----------
-    info : instance of mne.measuerment_info.Info
-        The info.
+    %(info_not_none)s
     meg_combined : bool | 'auto'
         Whether to return combined picks for grad and mag.
         Can be 'auto' to choose based on Maxwell filtering status.
@@ -1141,8 +1139,10 @@ def _picks_str_to_idx(info, picks, exclude, with_ref_meg, return_kind,
                 extra_picks |= set(pick_types(
                     info, meg=use_meg, ref_meg=False, exclude=exclude))
         if len(fnirs) > 0 and not kwargs.get('fnirs', False):
-            # if it has two entries, it's both, otherwise it's just one
-            kwargs['fnirs'] = True if len(fnirs) == 2 else list(fnirs)[0]
+            if len(fnirs) == 1:
+                kwargs['fnirs'] = list(fnirs)[0]
+            else:
+                kwargs['fnirs'] = list(fnirs)
         picks_type = pick_types(info, exclude=exclude, **kwargs)
         if len(extra_picks) > 0:
             picks_type = sorted(set(picks_type) | set(extra_picks))

@@ -1,6 +1,6 @@
 # Authors : Alexandre Gramfort, alexandre.gramfort@inria.fr (2011)
 #           Denis A. Engemann <denis.engemann@gmail.com>
-# License : BSD 3-clause
+# License : BSD-3-Clause
 
 from functools import partial
 import numpy as np
@@ -257,12 +257,13 @@ def psd_welch(inst, fmin=0, fmax=np.inf, tmin=None, tmax=None, n_fft=256,
 def psd_multitaper(inst, fmin=0, fmax=np.inf, tmin=None, tmax=None,
                    bandwidth=None, adaptive=False, low_bias=True,
                    normalization='length', picks=None, proj=False,
-                   n_jobs=1, verbose=None):
+                   n_jobs=1, reject_by_annotation=False, verbose=None):
     """Compute the power spectral density (PSD) using multitapers.
 
     Calculates spectral density for orthogonal tapers, then averages them
-    together for each channel/epoch. See [1] for a description of the tapers
-    and [2] for the general method.
+    together for each channel/epoch. See :footcite:`Slepian1978` for a
+    description of the tapers and :footcite:`PercivalWalden1993` for the
+    general method.
 
     Parameters
     ----------
@@ -293,6 +294,7 @@ def psd_multitaper(inst, fmin=0, fmax=np.inf, tmin=None, tmax=None,
     proj : bool
         Apply SSP projection vectors. If inst is ndarray this is not used.
     %(n_jobs)s
+    %(reject_by_annotation_raw)s
     %(verbose)s
 
     Returns
@@ -318,16 +320,11 @@ def psd_multitaper(inst, fmin=0, fmax=np.inf, tmin=None, tmax=None,
 
     References
     ----------
-    .. [1] Slepian, D. "Prolate spheroidal wave functions, Fourier analysis,
-           and uncertainty V: The discrete case." Bell System Technical
-           Journal, vol. 57, 1978.
-
-    .. [2] Percival D.B. and Walden A.T. "Spectral Analysis for Physical
-           Applications: Multitaper and Conventional Univariate Techniques."
-           Cambridge University Press, 1993.
+    .. footbibliography::
     """
     # Prep data
-    data, sfreq = _check_psd_data(inst, tmin, tmax, picks, proj)
+    data, sfreq = _check_psd_data(inst, tmin, tmax, picks, proj,
+                                  reject_by_annotation=reject_by_annotation)
     return psd_array_multitaper(data, sfreq, fmin=fmin, fmax=fmax,
                                 bandwidth=bandwidth, adaptive=adaptive,
                                 low_bias=low_bias, normalization=normalization,

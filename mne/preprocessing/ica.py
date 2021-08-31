@@ -4,7 +4,7 @@
 #          Alexandre Gramfort <alexandre.gramfort@inria.fr>
 #          Juergen Dammers <j.dammers@fz-juelich.de>
 #
-# License: BSD (3-clause)
+# License: BSD-3-Clause
 
 from inspect import isfunction
 from collections import namedtuple
@@ -186,18 +186,20 @@ class ICA(ContainsMixin):
         As estimation can be non-deterministic it can be useful to fix the
         random state to have reproducible results.
     method : {'fastica', 'infomax', 'picard'}
-        The ICA method to use in the fit method. Use the fit_params argument to
-        set additional parameters. Specifically, if you want Extended Infomax,
-        set method='infomax' and fit_params=dict(extended=True) (this also
-        works for method='picard'). Defaults to 'fastica'. For reference, see
-        :footcite:`Hyvarinen1999,BellSejnowski1995,LeeEtAl1999,AblinEtAl2018`.
+        The ICA method to use in the fit method. Use the ``fit_params`` argument
+        to set additional parameters. Specifically, if you want Extended
+        Infomax, set ``method='infomax'`` and ``fit_params=dict(extended=True)``
+        (this also works for ``method='picard'``). Defaults to ``'fastica'``.
+        For reference, see :footcite:`Hyvarinen1999,BellSejnowski1995,LeeEtAl1999,AblinEtAl2018`.
     fit_params : dict | None
         Additional parameters passed to the ICA estimator as specified by
         ``method``.
-    max_iter : int
-        Maximum number of iterations during fit. Defaults to 200. The actual
-        number of iterations it took :meth:`ICA.fit` to complete will be stored
-        in the ``n_iter_`` attribute.
+    max_iter : int | 'auto'
+        Maximum number of iterations during fit. If ``'auto'``, it
+        will set maximum iterations to ``1000`` for ``'fastica'``
+        and to ``500`` for ``'infomax'`` or ``'picard'``. The actual number of
+        iterations it took :meth:`ICA.fit` to complete will be stored in the
+        ``n_iter_`` attribute.
     allow_ref_meg : bool
         Allow ICA on MEG reference channels. Defaults to False.
 
@@ -243,8 +245,7 @@ class ICA(ContainsMixin):
         (There is also an ``exclude`` parameter in the :meth:`ICA.apply`
         method.) To scrap all marked components, set this attribute to an empty
         list.
-    info : None | instance of Info
-        The measurement info copied from the object fitted.
+    %(info)s
     n_samples_ : int
         The number of samples used on fit.
     labels_ : dict
@@ -256,6 +257,19 @@ class ICA(ContainsMixin):
 
     Notes
     -----
+    .. versionchanged:: 0.23
+        Version 0.23 introduced the ``max_iter='auto'`` settings for maximum
+        iterations. With version 0.24 ``'auto'`` will be the new
+        default, replacing the current ``max_iter=200``.
+
+    .. versionchanged:: 0.23
+        Warn if `~mne.Epochs` were baseline-corrected.
+
+    .. note:: If you intend to clean fit ICA on `~mne.Epochs`, it is
+              recommended to high-pass filter, but **not** baseline correct the
+              data for good ICA performance. A warning will be emitted
+              otherwise.
+
     A trailing ``_`` in an attribute name signifies that the attribute was
     added to the object during fitting, consistent with standard scikit-learn
     practice.
@@ -350,7 +364,7 @@ class ICA(ContainsMixin):
     compare tolerance levels between Infomax and Picard, but for Picard and
     FastICA a good rule of thumb is ``tol_fastica == tol_picard ** 2``.
 
-    .. _eeglab_wiki: https://sccn.ucsd.edu/wiki/Chapter_09:_Decomposing_Data_Using_ICA#Issue:_ICA_returns_near-identical_components_with_opposite_polarities
+    .. _eeglab_wiki: https://eeglab.org/tutorials/06_RejectArtifacts/RunICA.html#how-to-deal-with-corrupted-ica-decompositions
 
     References
     ----------
@@ -360,7 +374,7 @@ class ICA(ContainsMixin):
     @verbose
     def __init__(self, n_components=None, *, noise_cov=None,
                  random_state=None, method='fastica', fit_params=None,
-                 max_iter=200, allow_ref_meg=False,
+                 max_iter='auto', allow_ref_meg=False,
                  verbose=None):  # noqa: D102
         _validate_type(method, str, 'method')
         _validate_type(n_components, (float, 'int-like', None))
@@ -409,6 +423,13 @@ class ICA(ContainsMixin):
             # extended=True is default in underlying function, but we want
             # default False here unless user specified True:
             fit_params.setdefault('extended', False)
+        _validate_type(max_iter, (str, 'int-like'), 'max_iter')
+        if isinstance(max_iter, str):
+            _check_option('max_iter', max_iter, ('auto',), 'when str')
+            if method == 'fastica':
+                max_iter = 1000
+            elif method in ['infomax', 'picard']:
+                max_iter = 500
         fit_params.setdefault('max_iter', max_iter)
         self.max_iter = max_iter
         self.fit_params = fit_params
@@ -455,41 +476,49 @@ class ICA(ContainsMixin):
         Parameters
         ----------
         inst : instance of Raw or Epochs
-            Raw measurements to be decomposed.
+            The data to be decomposed.
         %(picks_good_data_noref)s
             This selection remains throughout the initialized ICA solution.
-        start : int | float | None
-            First sample to include. If float, data will be interpreted as
-            time in seconds. If None, data will be used from the first sample.
-        stop : int | float | None
-            Last sample to not include. If float, data will be interpreted as
-            time in seconds. If None, data will be used to the last sample.
+        start, stop : int | float | None
+            First and last sample to include. If float, data will be
+            interpreted as time in seconds. If ``None``, data will be used from
+            the first sample and to the last sample, respectively.
+
+            .. note:: These parameters only have an effect if ``inst`` is
+                      `~mne.io.Raw` data.
         decim : int | None
-            Increment for selecting each nth time slice. If None, all samples
-            within ``start`` and ``stop`` are used.
-        reject : dict | None
-            Rejection parameters based on peak-to-peak amplitude.
-            Valid keys are 'grad', 'mag', 'eeg', 'seeg', 'dbs', 'ecog', 'eog',
-            'ecg', 'hbo', 'hbr'.
-            If reject is None then no rejection is done. Example::
+            Increment for selecting only each n-th sampling point. If ``None``,
+            all samples  between ``start`` and ``stop`` (inclusive) are used.
 
-                reject = dict(grad=4000e-13, # T / m (gradiometers)
-                              mag=4e-12, # T (magnetometers)
-                              eeg=40e-6, # V (EEG channels)
-                              eog=250e-6 # V (EOG channels)
-                              )
+            .. note:: This parameter only has an effect if ``inst`` is
+                      `~mne.io.Raw` data.
+        reject, flat : dict | None
+            Rejection parameters based on peak-to-peak amplitude (PTP)
+            in the continuous data. Signal periods exceeding the thresholds
+            in ``reject`` or less than the thresholds in ``flat`` will be
+            removed before fitting the ICA.
 
-            It only applies if ``inst`` is of type Raw.
-        flat : dict | None
-            Rejection parameters based on flatness of signal.
-            Valid keys are 'grad', 'mag', 'eeg', 'seeg', 'dbs', 'ecog', 'eog',
-            'ecg', 'hbo', 'hbr'.
-            Values are floats that set the minimum acceptable peak-to-peak
-            amplitude. If flat is None then no rejection is done.
-            It only applies if ``inst`` is of type Raw.
+            .. note:: These parameters only have an effect if ``inst`` is
+                      `~mne.io.Raw` data. For `~mne.Epochs`, perform PTP
+                      rejection via :meth:`~mne.Epochs.drop_bad`.
+
+            Valid keys are all channel types present in the data. Values must
+            be integers or floats.
+
+            If ``None``, no PTP-based rejection will be performed. Example::
+
+                reject = dict(
+                    grad=4000e-13, # T / m (gradiometers)
+                    mag=4e-12, # T (magnetometers)
+                    eeg=40e-6, # V (EEG channels)
+                    eog=250e-6 # V (EOG channels)
+                )
+                flat = None  # no rejection based on flatness
         tstep : float
             Length of data chunks for artifact rejection in seconds.
-            It only applies if ``inst`` is of type Raw.
+
+            .. note:: This parameter only has an effect if ``inst`` is
+                      `~mne.io.Raw` data.
         %(reject_by_annotation_raw)s
 
             .. versionadded:: 0.14.0
@@ -501,6 +530,30 @@ class ICA(ContainsMixin):
             Returns the modified instance.
         """
         _validate_type(inst, (BaseRaw, BaseEpochs), 'inst', 'Raw or Epochs')
+
+        if np.isclose(inst.info['highpass'], 0.):
+            warn('The data has not been high-pass filtered. For good ICA '
+                 'performance, it should be high-pass filtered (e.g., with a '
+                 '1.0 Hz lower bound) before fitting ICA.')
+
+        if isinstance(inst, BaseEpochs) and inst.baseline is not None:
+            warn('The epochs you passed to ICA.fit() were baseline-corrected. '
+                 'However, we suggest to fit ICA only on data that has been '
+                 'high-pass filtered, but NOT baseline-corrected.')
+
+        if not isinstance(inst, BaseRaw):
+            ignored_params = [
+                param_name for param_name, param_val in zip(
+                    ('start', 'stop', 'decim', 'reject', 'flat'),
+                    (start, stop, decim, reject, flat)
+                )
+                if param_val is not None
+            ]
+            if ignored_params:
+                warn(f'The following parameters passed to ICA.fit() will be '
+                     f'ignored, as they only affect raw data (and it appears '
+                     f'you passed epochs): {", ".join(ignored_params)}')
+
         picks = _picks_to_idx(inst.info, picks, allow_empty=False,
                               with_ref_meg=self.allow_ref_meg)
         _check_for_unsupported_ica_channels(
@@ -776,10 +829,11 @@ class ICA(ContainsMixin):
         if self.pca_mean_ is not None:
             data -= self.pca_mean_[:, None]
 
-        # Apply first PCA
-        pca_data = np.dot(self.pca_components_[:self.n_components_], data)
-        # Apply unmixing to low dimension PCA
-        sources = np.dot(self.unmixing_matrix_, pca_data)
+        # Apply unmixing
+        pca_data = np.dot(self.unmixing_matrix_,
+                          self.pca_components_[:self.n_components_])
+        # Apply PCA
+        sources = np.dot(pca_data, data)
         return sources
 
     def _transform_raw(self, raw, start, stop, reject_by_annotation=False):
@@ -1217,9 +1271,11 @@ class ICA(ContainsMixin):
         start : int | float | None
             First sample to include. If float, data will be interpreted as
             time in seconds. If None, data will be used from the first sample.
+            When working with Epochs or Evoked objects, must be float or None.
         stop : int | float | None
             Last sample to not include. If float, data will be interpreted as
             time in seconds. If None, data will be used to the last sample.
+            When working with Epochs or Evoked objects, must be float or None.
         l_freq : float
             Low pass frequency.
         h_freq : float
@@ -1509,16 +1565,16 @@ class ICA(ContainsMixin):
               start=None, stop=None, verbose=None):
         """Remove selected components from the signal.
 
-        Given the unmixing matrix, transform data,
-        zero out components, and inverse transform the data.
+        Given the unmixing matrix, transform the data,
+        zero out all excluded components, and inverse-transform the data.
         This procedure will reconstruct M/EEG signals from which
         the dynamics described by the excluded components is subtracted.
-        The data is processed in place.
 
         Parameters
         ----------
         inst : instance of Raw, Epochs or Evoked
-            The data to be processed. The instance is modified inplace.
+            The data to be processed (i.e., cleaned). It will be modified
+            in-place.
         include : array_like of int
             The indices referring to columns in the ummixing matrix. The
             components to be kept.
@@ -1538,6 +1594,19 @@ class ICA(ContainsMixin):
         -------
         out : instance of Raw, Epochs or Evoked
             The processed data.
+
+        Notes
+        -----
+        .. note:: Applying ICA may introduce a DC shift. If you pass
+                  baseline-corrected `~mne.Epochs` or `~mne.Evoked` data,
+                  the baseline period of the cleaned data may not be of
+                  zero mean anymore. If you require baseline-corrected
+                  data, apply baseline correction again after cleaning
+                  via ICA. A warning will be emitted to remind you of this
+                  fact if you pass baseline-corrected data.
+
+        .. versionchanged:: 0.23
+            Warn if instance was baseline-corrected.
         """
         _validate_type(inst, (BaseRaw, BaseEpochs, Evoked), 'inst',
                        'Raw, Epochs, or Evoked')
@@ -1554,6 +1623,14 @@ class ICA(ContainsMixin):
             kwargs.update(evoked=inst)
         _check_compensation_grade(self.info, inst.info, 'ICA', kind,
                                   ch_names=self.ch_names)
+
+        if isinstance(inst, (BaseEpochs, Evoked)):
+            if getattr(inst, 'baseline', None) is not None:
+                warn('The data you passed to ICA.apply() was '
+                     'baseline-corrected. Please note that ICA can introduce '
+                     'DC shifts, therefore you may wish to consider '
+                     'baseline-correcting the cleaned data again.')
+
         logger.info(f'Applying ICA to {kind} instance')
         return meth(**kwargs)
 
@@ -1784,11 +1861,13 @@ class ICA(ContainsMixin):
     @copy_function_doc_to_method_doc(plot_ica_sources)
     def plot_sources(self, inst, picks=None, start=None,
                      stop=None, title=None, show=True, block=False,
-                     show_first_samp=False, show_scrollbars=True):
+                     show_first_samp=False, show_scrollbars=True,
+                     time_format='float'):
         return plot_ica_sources(self, inst=inst, picks=picks,
                                 start=start, stop=stop, title=title, show=show,
                                 block=block, show_first_samp=show_first_samp,
-                                show_scrollbars=show_scrollbars)
+                                show_scrollbars=show_scrollbars,
+                                time_format=time_format)
 
     @copy_function_doc_to_method_doc(plot_ica_scores)
     def plot_scores(self, scores, exclude=None, labels=None, axhline=None,

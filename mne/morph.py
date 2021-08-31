@@ -2,7 +2,7 @@
 #            Alexandre Gramfort <alexandre.gramfort@inria.fr>
 #            Eric Larson <larson.eric.d@gmail.com>
 
-# License: BSD (3-clause)
+# License: BSD-3-Clause
 
 import os.path as op
 import warnings
@@ -10,16 +10,16 @@ import copy
 import numpy as np
 
 from .fixes import _get_img_fdata
+from .morph_map import read_morph_map
 from .parallel import parallel_func
 from .source_estimate import (
     _BaseSurfaceSourceEstimate, _BaseVolSourceEstimate, _BaseSourceEstimate,
     _get_ico_tris)
 from .source_space import SourceSpaces, _ensure_src, _grid_interp
-from .surface import read_morph_map, mesh_edges, read_surface, _compute_nearest
-from .transforms import _angle_between_quats, rot_to_quat
+from .surface import mesh_edges, read_surface, _compute_nearest
 from .utils import (logger, verbose, check_version, get_subjects_dir,
                     warn as warn_, fill_doc, _check_option, _validate_type,
-                    BunchConst, wrapped_stdout, _check_fname, warn,
+                    BunchConst, _check_fname, warn,
                     _ensure_int, ProgressBar, use_log_level)
 from .externals.h5io import read_hdf5, write_hdf5
 
@@ -339,12 +339,11 @@ class SourceMorph(object):
         The volume MRI shape.
     affine : ndarray
         The volume MRI affine.
-    pre_affine : instance of dipy.align.imaffine.AffineMap
-        The :class:`dipy.align.imaffine.AffineMap` transformation that is
-        applied before the before ``sdr_morph``.
-    sdr_morph : instance of dipy.align.imwarp.DiffeomorphicMap
-        The :class:`dipy.align.imwarp.DiffeomorphicMap` that applies the
-        the symmetric diffeomorphic registration (SDR) morph.
+    pre_affine : instance of dipy.align.AffineMap
+        The transformation that is applied before the before ``sdr_morph``.
+    sdr_morph : instance of dipy.align.DiffeomorphicMap
+        The class that applies the the symmetric diffeomorphic registration
+        (SDR) morph.
     src_data : dict
         Additional source data necessary to perform morphing.
     vol_morph_mat : scipy.sparse.csr_matrix | None
@@ -664,8 +663,10 @@ _slicers = list()
 
 
 def _debug_img(data, affine, title, shape=None):
-    # XXX uncomment these lines for debugging help with volume morph
+    # Uncomment these lines for debugging help with volume morph:
+    #
     # import nibabel as nib
+    # from scipy import sparse
     # if sparse.issparse(data):
     #     data = data.toarray()
     # data = np.asarray(data)
@@ -1004,94 +1005,20 @@ def _interpolate_data(stc, morph, mri_resolution, mri_space, output):
 ###############################################################################
 # Morph for VolSourceEstimate
 
-def _compute_r2(a, b):
-    return 100 * (a.ravel() @ b.ravel()) / \
-        (np.linalg.norm(a) * np.linalg.norm(b))
-
-
 def _compute_morph_sdr(mri_from, mri_to, niter_affine, niter_sdr, zooms):
     """Get a matrix that morphs data from one subject to another."""
-    with np.testing.suppress_warnings():
-        from dipy.align import imaffine, imwarp, metrics, transforms
-    from dipy.align.reslice import reslice
-
-    logger.info('Computing nonlinear Symmetric Diffeomorphic Registration...')
-
-    # reslice mri_from to zooms
-    mri_from_orig = mri_from
-    mri_from, mri_from_affine = reslice(
-        _get_img_fdata(mri_from_orig), mri_from_orig.affine,
-        mri_from_orig.header.get_zooms()[:3], zooms)
-
-    # reslice mri_to to zooms
-    mri_to, affine = reslice(
-        _get_img_fdata(mri_to), mri_to.affine,
-        mri_to.header.get_zooms()[:3], zooms)
-
-    mri_to /= mri_to.max()
-    mri_from /= mri_from.max()  # normalize
-
-    # compute center of mass
-    c_of_mass = imaffine.transform_centers_of_mass(
-        mri_to, affine, mri_from, mri_from_affine)
-
-    # set up Affine Registration
-    affreg = imaffine.AffineRegistration(
-        metric=imaffine.MutualInformationMetric(nbins=32),
-        level_iters=list(niter_affine),
-        sigmas=[3.0, 1.0, 0.0],
-        factors=[4, 2, 1])
-
-    # translation
-    logger.info('Optimizing translation:')
-    with wrapped_stdout(indent='    ', cull_newlines=True):
-        translation = affreg.optimize(
-            mri_to, mri_from, transforms.TranslationTransform3D(), None,
-            affine, mri_from_affine, starting_affine=c_of_mass.affine)
-
-    # rigid body transform (translation + rotation)
-    logger.info('Optimizing rigid-body:')
-    with wrapped_stdout(indent='    ', cull_newlines=True):
-        rigid = affreg.optimize(
-            mri_to, mri_from, transforms.RigidTransform3D(), None,
-            affine, mri_from_affine, starting_affine=translation.affine)
-    mri_from_to = rigid.transform(mri_from)
-    dist = np.linalg.norm(rigid.affine[:3, 3])
-    angle = np.rad2deg(_angle_between_quats(
-        np.zeros(3), rot_to_quat(rigid.affine[:3, :3])))
-
-    logger.info(f'    Translation: {dist:6.1f} mm')
-    logger.info(f'    Rotation:    {angle:6.1f}°')
-    logger.info(f'    R²:          {_compute_r2(mri_to, mri_from_to):6.1f}%')
-
-    # affine transform (translation + rotation + scaling)
-    logger.info('Optimizing full affine:')
-    with wrapped_stdout(indent='    ', cull_newlines=True):
-        pre_affine = affreg.optimize(
-            mri_to, mri_from, transforms.AffineTransform3D(), None,
-            affine, mri_from_affine, starting_affine=rigid.affine)
-    mri_from_to = pre_affine.transform(mri_from)
-    logger.info(f'    R²:          {_compute_r2(mri_to, mri_from_to):6.1f}%')
-
-    # SDR
-    shape = tuple(pre_affine.domain_shape)
-    if len(niter_sdr):
-        sdr = imwarp.SymmetricDiffeomorphicRegistration(
-            metrics.CCMetric(3), list(niter_sdr))
-        logger.info('Optimizing SDR:')
-        with wrapped_stdout(indent='    ', cull_newlines=True):
-            sdr_morph = sdr.optimize(mri_to, pre_affine.transform(mri_from))
-        assert shape == tuple(sdr_morph.domain_shape)  # should be tuple of int
-        mri_from_to = sdr_morph.transform(mri_from_to)
-    else:
-        sdr_morph = None
-
-    logger.info(f'    R²:          {_compute_r2(mri_to, mri_from_to):6.1f}%')
-    _debug_img(mri_from_orig.dataobj, mri_from_orig.affine, 'From')
-    _debug_img(mri_from, affine, 'From-reslice')
-    _debug_img(mri_from_to, affine, 'From-reslice')
-    _debug_img(mri_to, affine, 'To-reslice')
-    return shape, zooms, affine, pre_affine, sdr_morph
+    from .transforms import _compute_volume_registration
+    from dipy.align.imaffine import AffineMap
+    pipeline = 'all' if niter_sdr else 'affines'
+    niter = dict(translation=niter_affine, rigid=niter_affine,
+                 affine=niter_affine,
+                 sdr=niter_sdr if niter_sdr else (1,))
+    pre_affine, sdr_morph, to_shape, to_affine, from_shape, from_affine = \
+        _compute_volume_registration(
+            mri_from, mri_to, zooms=zooms, niter=niter, pipeline=pipeline)
+    pre_affine = AffineMap(
+        pre_affine, to_shape, to_affine, from_shape, from_affine)
+    return to_shape, zooms, to_affine, pre_affine, sdr_morph
 
 
 def _compute_morph_matrix(subject_from, subject_to, vertices_from, vertices_to,
@@ -1141,7 +1068,7 @@ def _hemi_morph(tris, vertices_to, vertices_from, smooth, maps, warn):
     e = mesh_edges(tris)
     e.data[e.data == 2] = 1
     n_vertices = e.shape[0]
-    e = e + sparse.eye(n_vertices)
+    e += sparse.eye(n_vertices, format='csr')
     if isinstance(smooth, str):
         _check_option('smooth', smooth, ('nearest',),
                       extra=' when used as a string.')
@@ -1271,9 +1198,15 @@ def _surf_upsampling_mat(idx_from, e, smooth, warn=True):
     _validate_type(smooth, ('int-like', str, None), 'smoothing steps')
     if smooth is not None:  # number of steps
         smooth = _ensure_int(smooth, 'smoothing steps')
-        if smooth < 1:
+        if smooth == 0:
+            return sparse.csc_matrix(
+                (np.ones(len(idx_from)),  # data, indices, indptr
+                 idx_from,
+                 np.arange(len(idx_from) + 1)),
+                shape=(e.shape[0], len(idx_from))).tocsr()
+        elif smooth < 0:
             raise ValueError(
-                'The number of smoothing operations has to be at least 1, got '
+                'The number of smoothing operations has to be at least 0, got '
                 f'{smooth}')
         smooth = smooth - 1
     # idx will gradually expand from idx_from -> np.arange(n_tot)

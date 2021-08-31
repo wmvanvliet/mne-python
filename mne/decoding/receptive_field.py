@@ -2,7 +2,7 @@
 # Authors: Chris Holdgraf <choldgraf@gmail.com>
 #          Eric Larson <larson.eric.d@gmail.com>
 
-# License: BSD (3-clause)
+# License: BSD-3-Clause
 
 import numbers
 
@@ -68,7 +68,7 @@ class ReceptiveField(BaseEstimator):
         .. versionadded:: 0.18
     verbose : bool, str, int, or None
         If not None, override default verbose level (see
-        :func:`mne.verbose` and :ref:`Logging documentation <tut_logging>`
+        :func:`mne.verbose` and :ref:`Logging documentation <tut-logging>`
         for more).
 
     Attributes

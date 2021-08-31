@@ -9,8 +9,6 @@
 
 import os.path as op
 from pathlib import Path
-import sys
-import warnings
 
 import numpy as np
 from numpy.testing import assert_array_equal, assert_allclose
@@ -36,10 +34,10 @@ from mne.viz import (plot_sparse_source_estimates, plot_source_estimates,
                      plot_brain_colorbar, link_brains, mne_analyze_colormap)
 from mne.viz._3d import _process_clim, _linearize_map, _get_map_ticks
 from mne.viz.utils import _fake_click
-from mne.utils import (requires_nibabel, traits_test,
-                       catch_logging, run_subprocess, modified_env)
+from mne.utils import requires_nibabel, traits_test, catch_logging
 from mne.datasets import testing
 from mne.source_space import read_source_spaces
+from mne.transforms import Transform
 from mne.bem import read_bem_solution, read_bem_surfaces
 
 
@@ -105,7 +103,6 @@ def test_plot_head_positions():
 @pytest.mark.slowtest
 def test_plot_sparse_source_estimates(renderer_interactive, brain_gc):
     """Test plotting of (sparse) source estimates."""
-    _check_skip_pysurfer(renderer_interactive)
     sample_src = read_source_spaces(src_fname)
 
     # dense version
@@ -167,7 +164,7 @@ def test_plot_evoked_field(renderer):
 @pytest.mark.slowtest  # can be slow on OSX
 @testing.requires_testing_data
 @traits_test
-def test_plot_alignment(tmpdir, renderer):
+def test_plot_alignment(tmpdir, renderer, mixed_fwd_cov_evoked):
     """Test plotting of -trans.fif files and MEG sensor layouts."""
     # generate fiducials file for testing
     tempdir = str(tmpdir)
@@ -182,6 +179,7 @@ def test_plot_alignment(tmpdir, renderer):
 
     renderer.backend._close_all()
     evoked = read_evokeds(evoked_fname)[0]
+    info = evoked.info
     sample_src = read_source_spaces(src_fname)
     bti = read_raw_bti(pdf_fname, config_fname, hs_fname, convert=True,
                        preload=False).info
@@ -191,17 +189,17 @@ def test_plot_alignment(tmpdir, renderer):
         BTi=bti,
         KIT=read_raw_kit(sqd_fname).info,
     )
-    for system, info in infos.items():
+    for system, this_info in infos.items():
         meg = ['helmet', 'sensors']
         if system == 'KIT':
             meg.append('ref')
-        fig = plot_alignment(info, read_trans(trans_fname), subject='sample',
-                             subjects_dir=subjects_dir, meg=meg)
+        fig = plot_alignment(
+            this_info, read_trans(trans_fname), subject='sample',
+            subjects_dir=subjects_dir, meg=meg)
         rend = renderer.backend._Renderer(fig=fig)
         rend.close()
     # KIT ref sensor coil def is defined
     renderer.backend._close_all()
-    info = infos['Neuromag']
     pytest.raises(TypeError, plot_alignment, 'foo', trans_fname,
                   subject='sample', subjects_dir=subjects_dir)
     pytest.raises(OSError, plot_alignment, info, trans_fname,
@@ -211,9 +209,23 @@ def test_plot_alignment(tmpdir, renderer):
                   src=sample_src)
     sample_src.plot(subjects_dir=subjects_dir, head=True, skull=True,
                     brain='white')
+    # mixed source space
+    mixed_src = mixed_fwd_cov_evoked[0]['src']
+    assert mixed_src.kind == 'mixed'
+    plot_alignment(info, meg=['helmet', 'sensors'], dig=True,
+                   coord_frame='head', trans=Path(trans_fname),
+                   subject='sample', mri_fiducials=fiducials_path,
+                   subjects_dir=subjects_dir, src=mixed_src)
     renderer.backend._close_all()
     # no-head version
     renderer.backend._close_all()
+    # trans required
+    with pytest.raises(ValueError, match='transformation matrix is required'):
+        plot_alignment(info, trans=None, src=src_fname)
+    with pytest.raises(ValueError, match='transformation matrix is required'):
+        plot_alignment(info, trans=None, mri_fiducials=True)
+    with pytest.raises(ValueError, match='transformation matrix is required'):
+        plot_alignment(info, trans=None, surfaces=['brain'])
     # all coord frames
     plot_alignment(info)  # works: surfaces='auto' default
     for coord_frame in ('meg', 'head', 'mri'):
@@ -227,32 +239,40 @@ def test_plot_alignment(tmpdir, renderer):
     evoked_eeg_ecog_seeg.info['projs'] = []  # "remove" avg proj
     evoked_eeg_ecog_seeg.set_channel_types({'EEG 001': 'ecog',
                                             'EEG 002': 'seeg'})
-    with pytest.warns(RuntimeWarning, match='Cannot plot MEG'):
-        with catch_logging() as log:
-            plot_alignment(evoked_eeg_ecog_seeg.info, subject='sample',
-                           trans=trans_fname, subjects_dir=subjects_dir,
-                           surfaces=['white', 'outer_skin', 'outer_skull'],
-                           meg=['helmet', 'sensors'],
-                           eeg=['original', 'projected'], ecog=True, seeg=True,
-                           verbose=True)
+    with catch_logging() as log:
+        plot_alignment(evoked_eeg_ecog_seeg.info, subject='sample',
+                       trans=trans_fname, subjects_dir=subjects_dir,
+                       surfaces=['white', 'outer_skin', 'outer_skull'],
+                       meg=['helmet', 'sensors'],
+                       eeg=['original', 'projected'], ecog=True, seeg=True,
+                       verbose=True)
     log = log.getvalue()
-    assert '1 ECoG location' in log
-    assert '1 sEEG location' in log
+    assert 'ecog: 1' in log
+    assert 'seeg: 1' in log
     renderer.backend._close_all()
 
-    sphere = make_sphere_model(info=evoked.info, r0='auto', head_radius='auto')
+    sphere = make_sphere_model(info=info, r0='auto', head_radius='auto')
     bem_sol = read_bem_solution(op.join(subjects_dir, 'sample', 'bem',
                                         'sample-1280-1280-1280-bem-sol.fif'))
     bem_surfs = read_bem_surfaces(op.join(subjects_dir, 'sample', 'bem',
                                           'sample-1280-1280-1280-bem.fif'))
     sample_src[0]['coord_frame'] = 4  # hack for coverage
-    plot_alignment(info, subject='sample', eeg='projected',
-                   meg='helmet', bem=sphere, dig=True,
+    plot_alignment(info, trans_fname, subject='sample',
+                   eeg='projected', meg='helmet', bem=sphere, dig=True,
                    surfaces=['brain', 'inner_skull', 'outer_skull',
                              'outer_skin'])
-    plot_alignment(info, trans_fname, subject='sample', meg='helmet',
+    plot_alignment(info, subject='sample', meg='helmet',
                    subjects_dir=subjects_dir, eeg='projected', bem=sphere,
                    surfaces=['head', 'brain'], src=sample_src)
+    # no trans okay, no mri surfaces
+    plot_alignment(info, bem=sphere, surfaces=['brain'])
+    with pytest.raises(ValueError, match='A head surface is required'):
+        plot_alignment(info, trans=trans_fname, subject='sample',
+                       subjects_dir=subjects_dir, eeg='projected',
+                       surfaces=[])
+    with pytest.raises(RuntimeError, match='No brain surface found'):
+        plot_alignment(info, trans=trans_fname, subject='foo',
+                       subjects_dir=subjects_dir, surfaces=['brain'])
     assert all(surf['coord_frame'] == FIFF.FIFFV_COORD_MRI
                for surf in bem_sol['surfs'])
     plot_alignment(info, trans_fname, subject='sample', meg=[],
@@ -276,15 +296,17 @@ def test_plot_alignment(tmpdir, renderer):
         log = log.getvalue()
         assert 'not find the surface for head in the provided BEM model' in log
     # sphere model
-    sphere = make_sphere_model('auto', 'auto', evoked.info)
+    sphere = make_sphere_model('auto', 'auto', info)
     src = setup_volume_source_space(sphere=sphere)
-    plot_alignment(info, eeg='projected', meg='helmet', bem=sphere,
-                   src=src, dig=True, surfaces=['brain', 'inner_skull',
-                                                'outer_skull', 'outer_skin'])
-    sphere = make_sphere_model('auto', None, evoked.info)  # one layer
+    plot_alignment(
+        info, trans=Transform('head', 'mri'), eeg='projected',
+        meg='helmet', bem=sphere, src=src, dig=True,
+        surfaces=['brain', 'inner_skull', 'outer_skull', 'outer_skin'])
+    sphere = make_sphere_model('auto', None, info)  # one layer
     # if you ask for a brain surface with a 1-layer sphere model it's an error
     with pytest.raises(RuntimeError, match='Sphere model does not have'):
-        fig = plot_alignment(subject='sample', subjects_dir=subjects_dir,
+        fig = plot_alignment(trans=trans_fname, subject='sample',
+                             subjects_dir=subjects_dir,
                              surfaces=['brain'], bem=sphere)
     # but you can ask for a specific brain surface, and
     # no info is permitted
@@ -351,29 +373,24 @@ def test_plot_alignment(tmpdir, renderer):
     plot_alignment(subject='sample', subjects_dir=subjects_dir,
                    trans=trans_fname, fwd=fwd,
                    surfaces='white', coord_frame='head')
+    fwd['coord_frame'] = FIFF.FIFFV_COORD_MRI  # check required to get to MRI
+    with pytest.raises(ValueError, match='transformation matrix is required'):
+        plot_alignment(info, trans=None, fwd=fwd)
     # surfaces as dict
     plot_alignment(subject='sample', coord_frame='head',
-                   subjects_dir=subjects_dir,
+                   trans=trans_fname, subjects_dir=subjects_dir,
                    surfaces={'white': 0.4, 'outer_skull': 0.6, 'head': None})
     # fNIRS (default is pairs)
     info = read_raw_nirx(nirx_fname).info
     with catch_logging() as log:
-        plot_alignment(info, subject='fsaverage', surfaces=(), verbose=True)
+        plot_alignment(info, trans=Transform('head', 'mri'),
+                       subject='fsaverage', surfaces=(), verbose=True)
     log = log.getvalue()
-    assert '26 fNIRS pairs' in log
-    assert '26 fNIRS locations' not in log
-    assert '26 fNIRS sources' not in log
-    assert '26 fNIRS detectors' not in log
+    assert 'fnirs_cw_amplitude: 26' in log
 
-    with catch_logging() as log:
-        plot_alignment(info, subject='fsaverage', surfaces=(), verbose=True,
-                       fnirs=['channels', 'sources', 'detectors'])
-    log = log.getvalue()
-    assert '26 fNIRS pairs' not in log
-    assert '26 fNIRS locations' in log
-    assert '26 fNIRS sources' in log
-    assert '26 fNIRS detectors' in log
-
+    plot_alignment(info, trans=Transform('head', 'mri'), subject='fsaverage',
+                   surfaces=(), verbose=True,
+                   fnirs=['channels', 'sources', 'detectors'])
     renderer.backend._close_all()
 
 
@@ -382,7 +399,6 @@ def test_plot_alignment(tmpdir, renderer):
 @traits_test
 def test_process_clim_plot(renderer_interactive, brain_gc):
     """Test functionality for determining control points with stc.plot."""
-    _check_skip_pysurfer(renderer_interactive)
     sample_src = read_source_spaces(src_fname)
     kwargs = dict(subjects_dir=subjects_dir, smoothing_steps=1,
                   time_viewer=False, show_traces=False)
@@ -512,19 +528,18 @@ def test_stc_mpl():
     stc_data = np.ones((n_verts * n_time))
     stc_data.shape = (n_verts, n_time)
     stc = SourceEstimate(stc_data, vertices, 1, 1, 'sample')
-    with pytest.warns(RuntimeWarning, match='not included'):
-        stc.plot(subjects_dir=subjects_dir, time_unit='s', views='ven',
-                 hemi='rh', smoothing_steps=2, subject='sample',
-                 backend='matplotlib', spacing='oct1', initial_time=0.001,
-                 colormap='Reds')
-        fig = stc.plot(subjects_dir=subjects_dir, time_unit='ms', views='dor',
-                       hemi='lh', smoothing_steps=2, subject='sample',
-                       backend='matplotlib', spacing='ico2', time_viewer=True,
-                       colormap='mne')
-        time_viewer = fig.time_viewer
-        _fake_click(time_viewer, time_viewer.axes[0], (0.5, 0.5))  # change t
-        time_viewer.canvas.key_press_event('ctrl+right')
-        time_viewer.canvas.key_press_event('left')
+    stc.plot(subjects_dir=subjects_dir, time_unit='s', views='ven',
+             hemi='rh', smoothing_steps=7, subject='sample',
+             backend='matplotlib', spacing='oct1', initial_time=0.001,
+             colormap='Reds')
+    fig = stc.plot(subjects_dir=subjects_dir, time_unit='ms', views='dor',
+                   hemi='lh', smoothing_steps=7, subject='sample',
+                   backend='matplotlib', spacing='ico2', time_viewer=True,
+                   colormap='mne')
+    time_viewer = fig.time_viewer
+    _fake_click(time_viewer, time_viewer.axes[0], (0.5, 0.5))  # change t
+    time_viewer.canvas.key_press_event('ctrl+right')
+    time_viewer.canvas.key_press_event('left')
     pytest.raises(ValueError, stc.plot, subjects_dir=subjects_dir,
                   hemi='both', subject='sample', backend='matplotlib')
     pytest.raises(ValueError, stc.plot, subjects_dir=subjects_dir,
@@ -575,7 +590,8 @@ def test_snapshot_brain_montage(renderer):
     """Test snapshot brain montage."""
     info = read_info(evoked_fname)
     fig = plot_alignment(
-        info, trans=None, subject='sample', subjects_dir=subjects_dir)
+        info, trans=Transform('head', 'mri'), subject='sample',
+        subjects_dir=subjects_dir)
 
     xyz = np.vstack([ich['loc'][:3] for ich in info['chs']])
     ch_names = [ich['ch_name'] for ich in info['chs']]
@@ -592,17 +608,6 @@ def test_snapshot_brain_montage(renderer):
     pytest.raises(ValueError, snapshot_brain_montage, None, info)
 
 
-def _check_skip_pysurfer(renderer):
-    is_pyvista = renderer._get_3d_backend() == 'pyvista'
-    if not is_pyvista:
-        with warnings.catch_warnings(record=True):
-            try:
-                from surfer import Brain  # noqa: 401 analysis:ignore
-            except Exception:
-                pytest.skip('Requires PySurfer')
-    return is_pyvista
-
-
 @pytest.mark.slowtest  # can be slow on OSX
 @testing.requires_testing_data
 @pytest.mark.parametrize('pick_ori', ('vector', None))
@@ -610,7 +615,8 @@ def _check_skip_pysurfer(renderer):
 def test_plot_source_estimates(renderer_interactive, all_src_types_inv_evoked,
                                pick_ori, kind, brain_gc):
     """Test plotting of scalar and vector source estimates."""
-    is_pyvista = _check_skip_pysurfer(renderer_interactive)
+    backend = renderer_interactive._get_3d_backend()
+    is_pyvista = backend != 'mayavi'
     invs, evoked = all_src_types_inv_evoked
     inv = invs[kind]
     with pytest.warns(None):  # PCA mag
@@ -626,7 +632,7 @@ def test_plot_source_estimates(renderer_interactive, all_src_types_inv_evoked,
                   )
     if pick_ori != 'vector':
         kwargs['surface'] = 'white'
-        kwargs['backend'] = renderer_interactive._get_3d_backend()
+        kwargs['backend'] = backend
     # Mayavi can't handle non-surface
     if kind != 'surface' and not is_pyvista:
         with pytest.raises(RuntimeError, match='PyVista'):
@@ -660,10 +666,14 @@ def test_plot_source_estimates(renderer_interactive, all_src_types_inv_evoked,
 
     # flatmaps (mostly a lot of error checking)
     these_kwargs = kwargs.copy()
-    these_kwargs.update(surface='flat', views='auto')
+    these_kwargs.update(surface='flat', views='auto', hemi='both',
+                        verbose='debug')
     if kind == 'surface' and pick_ori != 'vector' and is_pyvista:
-        with pytest.raises(FileNotFoundError, match='flatmap'):
-            meth(**these_kwargs)  # sample does not have them
+        with catch_logging() as log:
+            with pytest.raises(FileNotFoundError, match='flatmap'):
+                meth(**these_kwargs)  # sample does not have them
+        log = log.getvalue()
+        assert 'offset: 0' in log
     fs_stc = stc.copy()
     fs_stc.subject = 'fsaverage'  # this is wrong, but don't have to care
     flat_meth = getattr(fs_stc, meth_key)
@@ -724,14 +734,21 @@ def test_plot_sensors_connectivity(renderer):
     n_channels = len(picks)
     con = np.random.RandomState(42).randn(n_channels, n_channels)
     info = raw.info
-    with pytest.raises(TypeError):
-        plot_sensors_connectivity(info='foo', con=con,
-                                  picks=picks)
-    with pytest.raises(ValueError):
-        plot_sensors_connectivity(info=info, con=con[::2, ::2],
-                                  picks=picks)
+    with pytest.raises(TypeError, match='must be an instance of Info'):
+        plot_sensors_connectivity(info='foo', con=con, picks=picks)
+    with pytest.raises(ValueError, match='does not correspond to the size'):
+        plot_sensors_connectivity(info=info, con=con[::2, ::2], picks=picks)
 
-    plot_sensors_connectivity(info=info, con=con, picks=picks)
+    fig = plot_sensors_connectivity(info=info, con=con, picks=picks)
+    if renderer._get_3d_backend() == 'pyvistaqt':
+        title = list(fig.plotter.scalar_bars.values())[0].GetTitle()
+    else:
+        assert renderer._get_3d_backend() == 'mayavi'
+        # the last thing we add is the Tube, so we need to go
+        # vtkDataSource->Stripper->Tube->ModuleManager
+        mod_man = fig.children[-1].children[0].children[0].children[0]
+        title = mod_man.scalar_lut_manager.scalar_bar.title
+    assert title == 'Connectivity'
 
 
 @pytest.mark.parametrize('orientation', ('horizontal', 'vertical'))
@@ -745,7 +762,8 @@ def test_brain_colorbar(orientation, diverging, lims):
         clim['pos_lims'] = lims
     else:
         clim['lims'] = lims
-    plot_brain_colorbar(ax, clim, orientation=orientation)
+    cbar = plot_brain_colorbar(ax, clim, orientation=orientation)
+    ax = cbar.ax  # in newer mpl this can be inset axes relative to the orig
     if orientation == 'vertical':
         have, empty = ax.get_yticklabels, ax.get_xticklabels
     else:
@@ -757,7 +775,7 @@ def test_brain_colorbar(orientation, diverging, lims):
             ticks = list(-np.array(lims[::-1])) + [0] + lims
     else:
         ticks = lims
-    plt.draw()
+    ax.figure.canvas.draw_idle()
     assert_array_equal(
         [float(h.get_text().replace('−', '-')) for h in have()], ticks)
     assert_array_equal(empty(), [])
@@ -768,7 +786,6 @@ def test_brain_colorbar(orientation, diverging, lims):
 @traits_test
 def test_mixed_sources_plot_surface(renderer_interactive):
     """Test plot_surface() for mixed source space."""
-    _check_skip_pysurfer(renderer_interactive)
     src = read_source_spaces(fwd_fname2)
     N = np.sum([s['nuse'] for s in src])  # number of sources
 
@@ -811,8 +828,8 @@ def test_link_brains(renderer_interactive):
         subjects_dir=subjects_dir, colorbar=True,
         clim='auto'
     )
-    if renderer_interactive._get_3d_backend() != 'pyvista':
-        with pytest.raises(NotImplementedError, match='backend is pyvista'):
+    if renderer_interactive._get_3d_backend() == 'mayavi':
+        with pytest.raises(NotImplementedError, match='backend is pyvistaqt'):
             link_brains(brain)
     else:
         with pytest.raises(ValueError, match='is empty'):
@@ -820,14 +837,3 @@ def test_link_brains(renderer_interactive):
         with pytest.raises(TypeError, match='type is Brain'):
             link_brains('foo')
         link_brains(brain, time=True, camera=True)
-
-
-def test_renderer(renderer):
-    """Test that renderers are available on demand."""
-    backend = renderer.get_3d_backend()
-    cmd = [sys.executable, '-uc',
-           'import mne; mne.viz.create_3d_figure((800, 600)); '
-           'backend = mne.viz.get_3d_backend(); '
-           'assert backend == %r, backend' % (backend,)]
-    with modified_env(MNE_3D_BACKEND=backend):
-        run_subprocess(cmd)

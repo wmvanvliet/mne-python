@@ -2,7 +2,7 @@
 """The config functions."""
 # Authors: Eric Larson <larson.eric.d@gmail.com>
 #
-# License: BSD (3-clause)
+# License: BSD-3-Clause
 
 import atexit
 from functools import partial
@@ -18,6 +18,7 @@ import re
 import numpy as np
 
 from .check import _validate_type, _check_pyqt5_version
+from .docs import fill_doc
 from ._logging import warn, logger
 
 
@@ -67,6 +68,7 @@ def set_memmap_min_size(memmap_min_size):
 known_config_types = (
     'MNE_3D_OPTION_ANTIALIAS',
     'MNE_BROWSE_RAW_SIZE',
+    'MNE_BROWSE_BACKEND',
     'MNE_CACHE_DIR',
     'MNE_COREG_ADVANCED_RENDERING',
     'MNE_COREG_COPY_ANNOT',
@@ -90,6 +92,7 @@ known_config_types = (
     'MNE_DATA',
     'MNE_DATASETS_BRAINSTORM_PATH',
     'MNE_DATASETS_EEGBCI_PATH',
+    'MNE_DATASETS_EPILEPSY_ECOG_PATH',
     'MNE_DATASETS_HF_SEF_PATH',
     'MNE_DATASETS_MEGSIM_PATH',
     'MNE_DATASETS_MISC_PATH',
@@ -108,6 +111,9 @@ known_config_types = (
     'MNE_DATASETS_PHANTOM_4DBTI_PATH',
     'MNE_DATASETS_LIMO_PATH',
     'MNE_DATASETS_REFMEG_NOISE_PATH',
+    'MNE_DATASETS_SSVEP_PATH',
+    'MNE_DATASETS_ERP_CORE_PATH',
+    'MNE_DATASETS_EPILEPSY_ECOG_PATH',
     'MNE_FORCE_SERIAL',
     'MNE_KIT2FIFF_STIM_CHANNELS',
     'MNE_KIT2FIFF_STIM_CHANNEL_CODING',
@@ -354,11 +360,17 @@ def get_subjects_dir(subjects_dir=None, raise_error=False):
     value : str | None
         The SUBJECTS_DIR value.
     """
+    _validate_type(item=subjects_dir, types=('path-like', None),
+                   item_name='subjects_dir', type_name='str or path-like')
+
     if subjects_dir is None:
         subjects_dir = get_config('SUBJECTS_DIR', raise_error=raise_error)
+    if subjects_dir is not None:
+        subjects_dir = str(subjects_dir)
     return subjects_dir
 
 
+@fill_doc
 def _get_stim_channel(stim_channel, info, raise_error=True):
     """Determine the appropriate stim_channel.
 
@@ -370,8 +382,7 @@ def _get_stim_channel(stim_channel, info, raise_error=True):
     ----------
     stim_channel : str | list of str | None
         The stim channel selected by the user.
-    info : instance of Info
-        An information structure containing information about the channels.
+    %(info_not_none)s
 
     Returns
     -------
@@ -549,7 +560,7 @@ def sys_info(fid=None, show_paths=False):
                 try:
                     from pyvistaqt import __version__
                 except Exception:
-                    pass
+                    extras += ['pyvistaqt not found']
                 else:
                     extras += [f'pyvistaqt={__version__}']
                 try:

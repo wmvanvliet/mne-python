@@ -1,7 +1,7 @@
 # Authors: Jaakko Leppakangas <jaeilepp@student.jyu.fi>
 #          Robert Luke <mail@robertluke.net>
 #
-# License: BSD 3 clause
+# License: BSD-3-Clause
 
 from collections import OrderedDict
 from datetime import datetime, timezone
@@ -62,8 +62,8 @@ def windows_like_datetime(monkeypatch):
 def test_basics():
     """Test annotation class."""
     raw = read_raw_fif(fif_fname)
-    assert raw.annotations is not None  # XXX to be fixed in #5416
-    assert len(raw.annotations.onset) == 0  # XXX to be fixed in #5416
+    assert raw.annotations is not None
+    assert len(raw.annotations.onset) == 0
     pytest.raises(IOError, read_annotations, fif_fname)
     onset = np.array(range(10))
     duration = np.ones(10)
@@ -247,8 +247,8 @@ def test_crop(tmpdir):
     raw.set_annotations(None)
     raw.save(fname, overwrite=True)
     raw_read = read_raw_fif(fname)
-    assert raw_read.annotations is not None  # XXX to be fixed in #5416
-    assert len(raw_read.annotations.onset) == 0  # XXX to be fixed in #5416
+    assert raw_read.annotations is not None
+    assert len(raw_read.annotations.onset) == 0
 
 
 @first_samps
@@ -689,9 +689,9 @@ def test_events_from_annot_onset_alingment():
     """Test events and annotations onset are the same."""
     raw = _raw_annot(meas_date=1, orig_time=1.5)
     #       sec  0        1        2        3
-    #       raw  .        |--------XXXXXXXXX
-    #     annot  .             |---XX
-    # raw.annot  .        |--------XX
+    #       raw  .        |--------xxxxxxxxx
+    #     annot  .             |---xx
+    # raw.annot  .        |--------xx
     #   latency  .        0        1        2
     #            .                 0        0
 
@@ -1284,3 +1284,91 @@ def test_annotation_ch_names():
         raw_2.set_annotations(annot, on_missing='warn')
     assert raw_2.annotations is not annot_pruned
     _assert_annotations_equal(raw_2.annotations, annot_pruned)
+
+
+def test_annotation_rename():
+    """Test annotation renaming works."""
+    a = Annotations([1, 2, 3], [5, 5, 8], ["a", "b", "c"])
+    assert isinstance(a.description, np.ndarray)
+    assert len(a) == 3
+    assert "a" in a.description
+    assert "b" in a.description
+    assert "c" in a.description
+    assert "new_name" not in a.description
+
+    a = Annotations([1, 2, 3], [5, 5, 8], ["a", "b", "c"])
+    a.rename({"a": "new_name"})
+    assert isinstance(a.description, np.ndarray)
+    assert len(a) == 3
+    assert "a" not in a.description
+    assert "new_name" in a.description
+    assert np.where([d == "new_name" for d in a.description])[0] == 0
+
+    a = Annotations([1, 2, 3], [5, 5, 8], ["a", "b", "c"])
+    a.rename({"a": "new_name", "b": "new name b"})
+    assert len(a) == 3
+    assert "a" not in a.description
+    assert "new_name" in a.description
+    assert "b" not in a.description
+    assert "new name b" in a.description
+    assert np.where([d == "new_name" for d in a.description])[0] == 0
+    assert np.where([d == "new name b" for d in a.description])[0] == 1
+
+    a = Annotations([1, 2, 3], [5, 5, 8], ["a", "b", "c"])
+    a.rename({"b": "new_name", "c": "new name c"})
+    assert isinstance(a.description, np.ndarray)
+    assert len(a) == 3
+    assert "b" not in a.description
+    assert "new_name" in a.description
+    assert "c" not in a.description
+    assert "new name c" in a.description
+    assert "a" in a.description
+    assert np.where([d == "new_name" for d in a.description])[0] == 1
+    assert np.where([d == "new name c" for d in a.description])[0] == 2
+    assert len(np.where([d == "new name b" for d in a.description])[0]) == 0
+
+    a = Annotations([1, 2, 3], [5, 5, 8], ["a", "b", "c"])
+    with pytest.raises(ValueError, match="not present in data"):
+        a.rename({"aaa": "does not exist"})
+    with pytest.raises(ValueError, match="[' a']"):
+        a.rename({" a": "does not exist"})
+    with pytest.raises(TypeError, match="dict, got <class 'str'> instead"):
+        a.rename("wrong")
+    with pytest.raises(TypeError, match="dict, got <class 'list'> instead"):
+        a.rename(["wrong"])
+    with pytest.raises(TypeError, match="dict, got <class 'set'> instead"):
+        a.rename({"wrong"})
+
+
+def test_annotation_duration_setting():
+    """Test annotation duration setting works."""
+    a = Annotations([1, 2, 3], [5, 5, 8], ["a", "b", "c"])
+    assert isinstance(a.duration, np.ndarray)
+    assert len(a) == 3
+    assert a.duration[0] == 5
+    assert a.duration[2] == 8
+    a.set_durations({"a": 3})
+    assert a.duration[0] == 3
+    assert a.duration[2] == 8
+    a.set_durations({"a": 313, "c": 18})
+    assert a.duration[0] == 313
+    assert a.duration[2] == 18
+    a.set_durations({"a": 1, "b": 13})
+    assert a.duration[0] == 1
+    assert a.duration[1] == 13
+
+    a = Annotations([1, 2, 3], [5, 5, 8], ["a", "b", "c"])
+    assert len(a) == 3
+    assert a.duration[0] == 5
+    assert a.duration[2] == 8
+    a.set_durations(7.2)
+    assert isinstance(a.duration, np.ndarray)
+    assert a.duration[0] == 7.2
+    assert a.duration[2] == 7.2
+    a.set_durations(2)
+    assert a.duration[0] == 2
+
+    with pytest.raises(ValueError, match="not present in data"):
+        a.set_durations({"aaa": 2.2})
+    with pytest.raises(TypeError, match=" got <class 'set'> instead"):
+        a.set_durations({"aaa", 2.2})

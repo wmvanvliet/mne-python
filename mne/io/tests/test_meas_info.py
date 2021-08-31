@@ -2,7 +2,7 @@
 # # Authors: MNE Developers
 #            Stefan Appelhoff <stefan.appelhoff@mailbox.org>
 #
-# License: BSD (3-clause)
+# License: BSD-3-Clause
 
 import hashlib
 import os.path as op
@@ -23,7 +23,7 @@ from mne.event import make_fixed_length_events
 from mne.datasets import testing
 from mne.io import (read_fiducials, write_fiducials, _coil_trans_to_loc,
                     _loc_to_coil_trans, read_raw_fif, read_info, write_info,
-                    meas_info, Projection)
+                    meas_info, Projection, BaseRaw)
 from mne.io.constants import FIFF
 from mne.io.write import _generate_meas_id, DATE_NONE
 from mne.io.meas_info import (Info, create_info, _merge_info,
@@ -33,7 +33,7 @@ from mne.io.meas_info import (Info, create_info, _merge_info,
                               _add_timedelta_to_stamp, _read_extended_ch_info)
 from mne.minimum_norm import (make_inverse_operator, write_inverse_operator,
                               read_inverse_operator, apply_inverse)
-from mne.io._digitization import _write_dig_points, _make_dig_points
+from mne.io._digitization import _write_dig_points, _make_dig_points, DigPoint
 from mne.io import read_raw_ctf
 from mne.transforms import Transform
 from mne.utils import catch_logging, assert_object_equal
@@ -159,6 +159,8 @@ def test_fiducials_io(tmpdir):
         assert pt['ident'] == pt_1['ident']
         assert pt['coord_frame'] == pt_1['coord_frame']
         assert_array_equal(pt['r'], pt_1['r'])
+        assert isinstance(pt, DigPoint)
+        assert isinstance(pt_1, DigPoint)
 
     # test safeguards
     pts[0]['coord_frame'] += 1
@@ -317,6 +319,18 @@ def test_io_dig_points(tmpdir):
             read_polhemus_fastscan(dest, on_header_missing='warn')
 
 
+def test_io_coord_frame(tmpdir):
+    """Test round trip for coordinate frame."""
+    fname = tmpdir.join('test.fif')
+    for ch_type in ('eeg', 'seeg', 'ecog', 'dbs', 'hbo', 'hbr'):
+        info = create_info(
+            ch_names=['Test Ch'], sfreq=1000., ch_types=[ch_type])
+        info['chs'][0]['loc'][:3] = [0.05, 0.01, -0.03]
+        write_info(fname, info)
+        info2 = read_info(fname)
+        assert info2['chs'][0]['coord_frame'] == FIFF.FIFFV_COORD_HEAD
+
+
 def test_make_dig_points():
     """Test application of Polhemus HSP to info."""
     extra_points = read_polhemus_fastscan(
@@ -412,7 +426,7 @@ def test_merge_info():
     info_0['bads'] = ['MEG 2443', 'EEG 053']
     assert len(info_0['chs']) == 376
     assert len(info_0['dig']) == 146
-    info_1 = create_info(["STI XXX"], info_0['sfreq'], ['stim'])
+    info_1 = create_info(["STI YYY"], info_0['sfreq'], ['stim'])
     assert info_1['bads'] == []
     info_out = _merge_info([info_0, info_1], force_update_to_first=True)
     assert len(info_out['chs']) == 377
@@ -540,6 +554,9 @@ def _test_anonymize_info(base_info):
     exp_info['subject_info']['last_name'] = default_str
     exp_info['subject_info']['id'] = default_subject_id
     exp_info['subject_info']['his_id'] = str(default_subject_id)
+    exp_info['subject_info']['sex'] = 0
+    del exp_info['subject_info']['hand']  # there's no "unknown" setting
+
     # this bday is 3653 days different. the change in day is due to a
     # different number of leap days between 1987 and 1977 than between
     # 2010 and 2000.
@@ -564,6 +581,8 @@ def _test_anonymize_info(base_info):
     # exp 2 tests the keep_his option
     exp_info_2 = exp_info.copy()
     exp_info_2['subject_info']['his_id'] = 'foobar'
+    exp_info_2['subject_info']['sex'] = 0
+    exp_info_2['subject_info']['hand'] = 1
 
     # exp 3 tests is a supplied daysback
     delta_t_2 = timedelta(days=43)
@@ -651,12 +670,37 @@ def test_anonymize(tmpdir):
     assert raw.first_samp == first_samp
     assert_allclose(raw.annotations.onset, expected_onset)
 
-    # Test instance method
+    # test mne.anonymize_info()
     events = read_events(event_name)
     epochs = Epochs(raw, events[:1], 2, 0., 0.1, baseline=None)
-
     _test_anonymize_info(raw.info.copy())
     _test_anonymize_info(epochs.info.copy())
+
+    # test instance methods & I/O roundtrip
+    for inst, keep_his in zip((raw, epochs), (True, False)):
+        inst = inst.copy()
+
+        subject_info = dict(his_id='Volunteer', sex=2, hand=1)
+        inst.info['subject_info'] = subject_info
+        inst.anonymize(keep_his=keep_his)
+
+        si = inst.info['subject_info']
+        if keep_his:
+            assert si == subject_info
+        else:
+            assert si['his_id'] == '0'
+            assert si['sex'] == 0
+            assert 'hand' not in si
+
+        # write to disk & read back
+        inst_type = 'raw' if isinstance(inst, BaseRaw) else 'epo'
+        fname = 'tmp_raw.fif' if inst_type == 'raw' else 'tmp_epo.fif'
+        out_path = tmpdir.join(fname)
+        inst.save(out_path, overwrite=True)
+        if inst_type == 'raw':
+            read_raw_fif(out_path)
+        else:
+            read_epochs(out_path)
 
     # test that annotations are correctly zeroed
     raw.anonymize()
@@ -667,8 +711,9 @@ def test_anonymize(tmpdir):
     assert raw.annotations.orig_time == _stamp_to_dt(stamp)
 
     raw.info['meas_date'] = None
+    raw.anonymize(daysback=None)
     with pytest.warns(RuntimeWarning, match='None'):
-        raw.anonymize()
+        raw.anonymize(daysback=123)
     assert raw.annotations.orig_time is None
     assert raw.first_samp == first_samp
     assert_allclose(raw.annotations.onset, expected_onset)
@@ -777,6 +822,14 @@ def test_repr():
     t = Transform(1, 2, np.ones((4, 4)))
     info['dev_head_t'] = t
     assert 'dev_head_t: MEG device -> isotrak transform' in repr(info)
+
+
+def test_repr_html():
+    """Test Info HTML repr."""
+    info = read_info(raw_fname)
+    assert 'Projections' in info._repr_html_()
+    info['projs'] = []
+    assert 'Projections' not in info._repr_html_()
 
 
 @testing.requires_testing_data

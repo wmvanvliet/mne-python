@@ -169,6 +169,14 @@ general neuroimaging concepts. If you think a term is missing, please consider
         it is a one-dimensional time series capturing the spatial variability
         of the signal across sensor locations.
 
+    HED
+    hierarchical event descriptors
+        Hierarchical event descriptors (abbr. ``HED``) are tags that use
+        keywords separated by '/' to describe different types of
+        experimental events (for example, stimulus/circle/red/left and
+        stimulus/circle/blue/left). These tags can be used to group
+        experimental events and select event types for analysis.
+
     HPI
     cHPI
     head position indicator
@@ -216,6 +224,16 @@ general neuroimaging concepts. If you think a term is missing, please consider
         estimate activity for a given source while suppressing cross-talk from
         other regions, see :func:`beamformer.make_lcmv`. See also
         :term:`beamformer`.
+
+    FreeSurfer LUT
+    LUT
+        A FreeSurfer lookup table (LUT) provides a mapping between a given
+        volumetric atlas or surface label name (strings), its integer value
+        (e.g., in ``aparc+aseg.mgz``), and its standard color. See
+        `the FreeSurfer wiki <https://surfer.nmr.mgh.harvard.edu/fswiki/FsTutorial/AnatomicalROI/FreeSurferColorLUT>`__
+        for more information. Custom LUTs can be also be created from different
+        surface parcellations, see for example `this comment about HCPMMP
+        <https://github.com/mne-tools/mne-python/pull/7639#issuecomment-625907891>`__.
 
     maximum intensity projection
         A method of displaying activity within some volume by, for each pixel,
@@ -324,6 +342,11 @@ general neuroimaging concepts. If you think a term is missing, please consider
         onset of a stimulus, or a subject response). Stim channels are often
         prefixed with ``STI`` to distinguish them from other channel types. See
         :ref:`stim-channel-defined` for more details.
+
+    tfr
+        Time-frequency representation. This is often a spectrogram (STFT) or
+        scaleogram (wavelet), showing the frequency content as a function of
+        time.
 
     trans
         A coordinate frame affine transformation, usually between the Neuromag head

@@ -2,7 +2,7 @@
 #          Matti Hämäläinen <msh@nmr.mgh.harvard.edu>
 #          Denis A. Engemann <denis.engemann@gmail.com>
 #
-# License: BSD (3-clause)
+# License: BSD-3-Clause
 
 from copy import deepcopy
 from distutils.version import LooseVersion
@@ -270,8 +270,7 @@ class Covariance(dict):
 
         Parameters
         ----------
-        info : instance of Info
-            The measurement information.
+        %(info_not_none)s
         %(topomap_ch_type)s
         %(topomap_vmin_vmax)s
         %(topomap_cmap)s
@@ -400,8 +399,7 @@ def make_ad_hoc_cov(info, std=None, verbose=None):
 
     Parameters
     ----------
-    info : instance of Info
-        Measurement info.
+    %(info_not_none)s
     std : dict of float | None
         Standard_deviation of the diagonal elements. If dict, keys should be
         ``'grad'`` for gradiometers, ``'mag'`` for magnetometers and ``'eeg'``
@@ -1104,10 +1102,7 @@ def _compute_covariance_auto(data, method, info, method_params, cv,
                 del sc
 
             elif method_ == 'shrunk':
-                try:
-                    from sklearn.model_selection import GridSearchCV
-                except Exception:  # support sklearn < 0.18
-                    from sklearn.grid_search import GridSearchCV
+                from sklearn.model_selection import GridSearchCV
                 from sklearn.covariance import ShrunkCovariance
                 shrinkage = mp.pop('shrinkage')
                 tuned_parameters = [{'shrinkage': shrinkage}]
@@ -1183,11 +1178,7 @@ def _gaussian_loglik_scorer(est, X, y=None):
 
 def _cross_val(data, est, cv, n_jobs):
     """Compute cross validation."""
-    try:
-        from sklearn.model_selection import cross_val_score
-    except ImportError:
-        # XXX support sklearn < 0.18
-        from sklearn.cross_validation import cross_val_score
+    from sklearn.model_selection import cross_val_score
     return np.mean(cross_val_score(est, data, cv=cv, n_jobs=n_jobs,
                                    scoring=_gaussian_loglik_scorer))
 
@@ -1440,8 +1431,7 @@ def prepare_noise_cov(noise_cov, info, ch_names=None, rank=None,
     ----------
     noise_cov : instance of Covariance
         The noise covariance to process.
-    info : dict
-        The measurement info (used to get channel types and bad channels).
+    %(info_not_none)s (Used to get channel types and bad channels).
     ch_names : list | None
         The channel names to be considered. Can be None to use
         ``info['ch_names']``.
@@ -1577,8 +1567,7 @@ def regularize(cov, info, mag=0.1, grad=0.1, eeg=0.1, exclude='bads',
     ----------
     cov : Covariance
         The noise covariance matrix.
-    info : dict
-        The measurement info (used to get channel types and bad channels).
+    %(info_not_none)s (Used to get channel types and bad channels).
     mag : float (default 0.1)
         Regularization factor for MEG magnetometers.
     grad : float (default 0.1)
@@ -1783,8 +1772,7 @@ def compute_whitener(noise_cov, info=None, picks=None, rank=None,
     ----------
     noise_cov : Covariance
         The noise covariance.
-    info : dict | None
-        The measurement info. Can be None if ``noise_cov`` has already been
+    %(info)s Can be None if ``noise_cov`` has already been
         prepared with :func:`prepare_noise_cov`.
     %(picks_good_data_noref)s
     %(rank_None)s

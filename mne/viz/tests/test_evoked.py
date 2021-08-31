@@ -17,6 +17,7 @@ import pytest
 import matplotlib.pyplot as plt
 from matplotlib import gridspec
 from matplotlib.cm import get_cmap
+from matplotlib.collections import PolyCollection
 
 import mne
 from mne import (read_events, Epochs, read_cov, compute_covariance,
@@ -281,6 +282,9 @@ def test_plot_evoked_image():
         pytest.raises(ValueError, evoked.plot_image, group_by=group_by,
                       axes=axes)
 
+    with pytest.raises(ValueError, match='`clim` must be a dict.'):
+        evoked.plot_image(clim=[-4, 4])
+
 
 def test_plot_white():
     """Test plot_white."""
@@ -320,6 +324,7 @@ def test_plot_white():
     evoked_sss.plot_white(cov, time_unit='s')
 
 
+@pytest.mark.slowtest  # slow on Azure
 def test_plot_compare_evokeds():
     """Test plot_compare_evokeds."""
     evoked = _get_epochs().average()
@@ -355,10 +360,22 @@ def test_plot_compare_evokeds():
         assert (yvals < ylim[1]).all()
         assert (yvals > ylim[0]).all()
     plt.close('all')
+
     # test other CI args
-    for _ci in (None, False, 0.5,
-                lambda x: np.stack([x.mean(axis=0) + 1, x.mean(axis=0) - 1])):
-        plot_compare_evokeds({'cond': [blue, red, evoked]}, ci=_ci)
+    def ci_func(array):
+        return array.mean(axis=0, keepdims=True) * np.array([[0.5], [1.5]])
+
+    ci_types = (None, False, 0.5, ci_func)
+    for _ci in ci_types:
+        fig = plot_compare_evokeds({'cond': [blue, red, evoked]}, ci=_ci)[0]
+        if _ci in ci_types[2:]:
+            assert np.any([isinstance(coll, PolyCollection)
+                           for coll in fig.axes[0].collections])
+    # make sure we can get a CI even for single conditions
+    fig = plot_compare_evokeds(evoked, picks='eeg', ci=ci_func)[0]
+    assert np.any([isinstance(coll, PolyCollection)
+                   for coll in fig.axes[0].collections])
+
     with pytest.raises(TypeError, match='"ci" must be None, bool, float or'):
         plot_compare_evokeds(evoked, ci='foo')
     # test sensor inset, legend location, and axis inversion & truncation
@@ -381,6 +398,11 @@ def test_plot_compare_evokeds():
     plot_compare_evokeds(evoked_dict, cmap=cmap, colors=dict(aud=1, vis=2))
     plot_compare_evokeds(evoked_dict, cmap=('cmap title', 'inferno'),
                          linestyles=['-', ':', '--'])
+    plt.close('all')
+    # test combine
+    match = 'combine must be an instance of None, callable, or str'
+    with pytest.raises(TypeError, match=match):
+        plot_compare_evokeds(evoked, combine=["mean", "gfp"])
     plt.close('all')
     # test warnings
     with pytest.warns(RuntimeWarning, match='in "picks"; cannot combine'):

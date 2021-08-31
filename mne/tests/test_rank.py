@@ -204,7 +204,11 @@ def test_maxfilter_get_rank(n_proj, fname, rank_orig, meg, tol_kind, tol):
     assert raw.info['projs'] == []
     mf = raw.info['proc_history'][0]['max_info']
     assert mf['sss_info']['nfree'] == rank_orig
-    assert _get_rank_sss(raw) == rank_orig
+
+    assert compute_rank(raw, 'info')['meg'] == rank_orig
+    assert compute_rank(raw.copy().pick('grad'), 'info')['grad'] == rank_orig
+    assert compute_rank(raw.copy().pick('mag'), 'info')['mag'] == rank_orig
+
     mult = 1 + (meg == 'separate')
     rank = rank_orig - mult * n_proj
     if n_proj > 0:
@@ -217,7 +221,7 @@ def test_maxfilter_get_rank(n_proj, fname, rank_orig, meg, tol_kind, tol):
     # degenerate cases
     with pytest.raises(ValueError, match='tol must be'):
         _estimate_rank_raw(raw, tol='foo')
-    with pytest.raises(TypeError, match='must be a string or a number'):
+    with pytest.raises(TypeError, match='must be a string or a'):
         _estimate_rank_raw(raw, tol=None)
 
     allowed_rank = [rank_orig if meg == 'separate' else rank]

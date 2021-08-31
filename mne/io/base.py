@@ -8,8 +8,9 @@
 #          Stefan Appelhoff <stefan.appelhoff@mailbox.org>
 #          Clemens Brunner <clemens.brunner@gmail.com>
 #
-# License: BSD (3-clause)
+# License: BSD-3-Clause
 
+from contextlib import nullcontext
 from copy import deepcopy
 from datetime import timedelta
 import os
@@ -23,7 +24,7 @@ from .constants import FIFF
 from .utils import _construct_bids_filename, _check_orig_units
 from .pick import (pick_types, pick_channels, pick_info, _picks_to_idx,
                    channel_type)
-from .meas_info import write_meas_info
+from .meas_info import write_meas_info, _ensure_infos_match
 from .proj import setup_proj, activate_proj, _proj_equal, ProjMixin
 from ..channels.channels import (ContainsMixin, UpdateChannelsMixin,
                                  SetChannelsMixin, InterpolationMixin,
@@ -38,7 +39,6 @@ from ..annotations import (_annotations_starts_stops, _write_annotations,
                            _handle_meas_date)
 from ..filter import (FilterMixin, notch_filter, resample, _resamp_ratio_len,
                       _resample_stim_channels, _check_fun)
-from ..fixes import nullcontext
 from ..parallel import parallel_func
 from ..utils import (_check_fname, _check_pandas_installed, sizeof_fmt,
                      _check_pandas_index_arguments, fill_doc, copy_doc,
@@ -52,6 +52,7 @@ from ..defaults import _handle_default
 from ..viz import plot_raw, plot_raw_psd, plot_raw_psd_topo, _RAW_CLIP_DEF
 from ..event import find_events, concatenate_events
 from ..annotations import Annotations, _combine_annotations, _sync_onset
+from ..data.html_templates import raw_template
 
 
 class TimeMixin(object):
@@ -84,6 +85,40 @@ class TimeMixin(object):
             index = np.round(index)
         return index.astype(int)
 
+    def _handle_tmin_tmax(self, tmin, tmax):
+        """Convert seconds to index into data.
+
+        Parameters
+        ----------
+        tmin : int | float | None
+            Start time of data to get in seconds.
+        tmax : int | float | None
+            End time of data to get in seconds.
+
+        Returns
+        -------
+        start : int
+            Integer index into data corresponding to tmin.
+        stop : int
+            Integer index into data corresponding to tmax.
+
+        """
+        _validate_type(tmin, types=('numeric', None), item_name='tmin',
+                       type_name="int, float, None")
+        _validate_type(tmax, types=('numeric', None), item_name='tmax',
+                       type_name='int, float, None')
+
+        # handle tmin/tmax as start and stop indices into data array
+        n_times = self.times.size
+        start = 0 if tmin is None else self.time_as_index(tmin)[0]
+        stop = n_times if tmax is None else self.time_as_index(tmax)[0]
+
+        # truncate start/stop to the open interval [0, n_times]
+        start = min(max(0, start), n_times)
+        stop = min(max(0, stop), n_times)
+
+        return start, stop
+
 
 @fill_doc
 class BaseRaw(ProjMixin, ContainsMixin, UpdateChannelsMixin, SetChannelsMixin,
@@ -92,8 +127,7 @@ class BaseRaw(ProjMixin, ContainsMixin, UpdateChannelsMixin, SetChannelsMixin,
 
     Parameters
     ----------
-    info : dict
-        A dict passed from the subclass.
+    %(info_not_none)s
     preload : bool | str | ndarray
         Preload data into memory for data manipulation and faster indexing.
         If True, the data will be preloaded into memory (fast, requires
@@ -229,7 +263,7 @@ class BaseRaw(ProjMixin, ContainsMixin, UpdateChannelsMixin, SetChannelsMixin,
             # this was artificially added by the IO procedure, so remove it
             ch_names = list(info['ch_names'])
             if ('STI 014' in ch_names) and not \
-               (self.filenames[0].endswith('.fif')):
+                    (self.filenames[0].endswith('.fif')):
                 ch_names.remove('STI 014')
 
             # Each channel in the data must have a corresponding channel in
@@ -798,7 +832,8 @@ class BaseRaw(ProjMixin, ContainsMixin, UpdateChannelsMixin, SetChannelsMixin,
 
     @verbose
     def get_data(self, picks=None, start=0, stop=None,
-                 reject_by_annotation=None, return_times=False, verbose=None):
+                 reject_by_annotation=None, return_times=False, units=None,
+                 *, tmin=None, tmax=None, verbose=None):
         """Get data in the given range.
 
         Parameters
@@ -815,6 +850,17 @@ class BaseRaw(ProjMixin, ContainsMixin, UpdateChannelsMixin, SetChannelsMixin,
             'bad' are omitted. If 'NaN', the bad samples are filled with NaNs.
         return_times : bool
             Whether to return times as well. Defaults to False.
+        %(units)s
+        tmin : int | float | None
+            Start time of data to get in seconds. The ``tmin`` parameter is
+            ignored if the ``start`` parameter is bigger than 0.
+
+            .. versionadded:: 0.24.0
+        tmax : int | float | None
+            End time of data to get in seconds. The ``tmax`` parameter is
+            ignored if the ``stop`` parameter is defined.
+
+            .. versionadded:: 0.24.0
         %(verbose_meth)s
 
         Returns
@@ -829,14 +875,45 @@ class BaseRaw(ProjMixin, ContainsMixin, UpdateChannelsMixin, SetChannelsMixin,
         -----
         .. versionadded:: 0.14.0
         """
+        # validate types
+        _validate_type(start, types=('int-like'), item_name='start',
+                       type_name='int')
+        _validate_type(stop, types=('int-like', None), item_name='stop',
+                       type_name='int, None')
+
         picks = _picks_to_idx(self.info, picks, 'all', exclude=())
+
+        # Get channel factors for conversion into specified unit
+        # (vector of ones if no conversion needed)
+        if units is not None:
+            ch_factors = _get_ch_factors(self, units, picks)
+
         # convert to ints
         picks = np.atleast_1d(np.arange(self.info['nchan'])[picks])
-        start = 0 if start is None else start
-        stop = min(self.n_times if stop is None else stop, self.n_times)
+
+        # handle start/tmin stop/tmax
+        tmin_start, tmax_stop = self._handle_tmin_tmax(tmin, tmax)
+
+        # tmin/tmax are ignored if start/stop are defined to
+        # something other than their defaults
+        start = tmin_start if start == 0 else start
+        stop = tmax_stop if stop is None else stop
+
+        # truncate start/stop to the open interval [0, n_times]
+        start = min(max(0, start), self.n_times)
+        stop = min(max(0, stop), self.n_times)
+
         if len(self.annotations) == 0 or reject_by_annotation is None:
-            return self._getitem(
+            getitem = self._getitem(
                 (picks, slice(start, stop)), return_times=return_times)
+            if return_times:
+                data, times = getitem
+                if units is not None:
+                    data *= ch_factors[:, np.newaxis]
+                return data, times
+            if units is not None:
+                getitem *= ch_factors[:, np.newaxis]
+            return getitem
         _check_option('reject_by_annotation', reject_by_annotation.lower(),
                       ['omit', 'nan'])
         onsets, ends = _annotations_starts_stops(self, ['BAD'])
@@ -845,6 +922,8 @@ class BaseRaw(ProjMixin, ContainsMixin, UpdateChannelsMixin, SetChannelsMixin,
         ends = np.minimum(ends[keep], stop)
         if len(onsets) == 0:
             data, times = self[picks, start:stop]
+            if units is not None:
+                data *= ch_factors[:, np.newaxis]
             if return_times:
                 return data, times
             return data
@@ -886,58 +965,30 @@ class BaseRaw(ProjMixin, ContainsMixin, UpdateChannelsMixin, SetChannelsMixin,
         else:
             data, times = self[picks, start:stop]
 
+        if units is not None:
+            data *= ch_factors[:, np.newaxis]
         if return_times:
             return data, times
         return data
 
     @verbose
     def apply_function(self, fun, picks=None, dtype=None, n_jobs=1,
-                       channel_wise=True, verbose=None, *args, **kwargs):
+                       channel_wise=True, verbose=None, **kwargs):
         """Apply a function to a subset of channels.
 
-        The function "fun" is applied to the channels defined in "picks". The
-        data of the Raw object is modified inplace. If the function returns
-        a different data type (e.g. numpy.complex) it must be specified using
-        the dtype parameter, which causes the data type used for representing
-        the raw data to change.
-
-        The Raw object has to have the data loaded e.g. with ``preload=True``
-        or ``self.load_data()``.
-
-        .. note:: If n_jobs > 1, more memory is required as
-                  ``len(picks) * n_times`` additional time points need to
-                  be temporaily stored in memory.
-
-        .. note:: If the data type changes (dtype != None), more memory is
-                  required since the original and the converted data needs
-                  to be stored in memory.
+        %(applyfun_summary_raw)s
 
         Parameters
         ----------
-        fun : callable
-            A function to be applied to the channels. The first argument of
-            fun has to be a timeseries (numpy.ndarray). The function must
-            operate on an array of shape ``(n_times,)`` if
-            ``channel_wise=True`` and ``(len(picks), n_times)`` otherwise.
-            The function must return an ndarray shaped like its input.
+        %(applyfun_fun)s
         %(picks_all_data_noref)s
-        dtype : numpy.dtype (default: None)
-            Data type to use for raw data after applying the function. If None
-            the data type is not modified.
-        n_jobs : int (default: 1)
-            Number of jobs to run in parallel. Ignored if ``channel_wise`` is
-            False.
-        channel_wise : bool (default: True)
-            Whether to apply the function to each channel individually. If
-            False, the function will be applied to all channels at once.
+        %(applyfun_dtype)s
+        %(n_jobs)s
+        %(applyfun_chwise)s
 
             .. versionadded:: 0.18
         %(verbose_meth)s
-        *args : list
-            Additional positional arguments to pass to fun (first pos. argument
-            of fun is the timeseries of a channel).
-        **kwargs : dict
-            Keyword arguments to pass to fun.
+        %(kwarg_fun)s
 
         Returns
         -------
@@ -959,17 +1010,17 @@ class BaseRaw(ProjMixin, ContainsMixin, UpdateChannelsMixin, SetChannelsMixin,
                 # modify data inplace to save memory
                 for idx in picks:
                     self._data[idx, :] = _check_fun(fun, data_in[idx, :],
-                                                    *args, **kwargs)
+                                                    **kwargs)
             else:
                 # use parallel function
                 parallel, p_fun, _ = parallel_func(_check_fun, n_jobs)
                 data_picks_new = parallel(
-                    p_fun(fun, data_in[p], *args, **kwargs) for p in picks)
+                    p_fun(fun, data_in[p], **kwargs) for p in picks)
                 for pp, p in enumerate(picks):
                     self._data[p, :] = data_picks_new[pp]
         else:
             self._data[picks, :] = _check_fun(
-                fun, data_in[picks, :], *args, **kwargs)
+                fun, data_in[picks, :], **kwargs)
 
         return self
 
@@ -1365,11 +1416,12 @@ class BaseRaw(ProjMixin, ContainsMixin, UpdateChannelsMixin, SetChannelsMixin,
         or all forms of SSS). It is recommended not to concatenate and
         then save raw files for this reason.
         """
-        fname = op.realpath(fname)
+        fname = op.abspath(fname)
         endings = ('raw.fif', 'raw_sss.fif', 'raw_tsss.fif',
                    '_meg.fif', '_eeg.fif', '_ieeg.fif')
         endings += tuple([f'{e}.gz' for e in endings])
-        check_fname(fname, 'raw', endings)
+        endings_err = ('.fif', '.fif.gz')
+        check_fname(fname, 'raw', endings, endings_err=endings_err)
 
         split_size = _get_split_size(split_size)
         if not self.preload and fname in self._filenames:
@@ -1421,6 +1473,29 @@ class BaseRaw(ProjMixin, ContainsMixin, UpdateChannelsMixin, SetChannelsMixin,
                    start, stop, buffer_size, projector, drop_small_buffer,
                    split_size, split_naming, 0, None, overwrite)
 
+    @verbose
+    def export(self, fname, fmt='auto', physical_range='auto', verbose=None):
+        """Export Raw to external formats.
+
+        Supported formats: EEGLAB (set, uses :mod:`eeglabio`)
+        %(export_warning)s :meth:`save` instead.
+
+        Parameters
+        ----------
+        %(export_params_fname)s
+        %(export_params_fmt)s
+        %(export_params_physical_range)s
+        %(verbose)s
+
+        Notes
+        -----
+        %(export_eeglab_note)s
+        %(export_edf_note)s
+        """
+        from ..export import export_raw
+        export_raw(fname, self, fmt, physical_range=physical_range,
+                   verbose=verbose)
+
     def _tmin_tmax_to_start_stop(self, tmin, tmax):
         start = int(np.floor(tmin * self.info['sfreq']))
 
@@ -1443,14 +1518,16 @@ class BaseRaw(ProjMixin, ContainsMixin, UpdateChannelsMixin, SetChannelsMixin,
              highpass=None, lowpass=None, filtorder=4, clipping=_RAW_CLIP_DEF,
              show_first_samp=False, proj=True, group_by='type',
              butterfly=False, decim='auto', noise_cov=None, event_id=None,
-             show_scrollbars=True, show_scalebars=True, verbose=None):
+             show_scrollbars=True, show_scalebars=True, time_format='float',
+             verbose=None):
         return plot_raw(self, events, duration, start, n_channels, bgcolor,
                         color, bad_color, event_color, scalings, remove_dc,
                         order, show_options, title, show, block, highpass,
-                        lowpass, filtorder, clipping, show_first_samp, proj,
-                        group_by, butterfly, decim, noise_cov=noise_cov,
+                        lowpass, filtorder, clipping, show_first_samp,
+                        proj, group_by, butterfly, decim, noise_cov=noise_cov,
                         event_id=event_id, show_scrollbars=show_scrollbars,
-                        show_scalebars=show_scalebars, verbose=verbose)
+                        show_scalebars=show_scalebars,
+                        time_format=time_format, verbose=verbose)
 
     @verbose
     @copy_function_doc_to_method_doc(plot_raw_psd)
@@ -1460,7 +1537,7 @@ class BaseRaw(ProjMixin, ContainsMixin, UpdateChannelsMixin, SetChannelsMixin,
                  area_mode='std', area_alpha=0.33, dB=True, estimate='auto',
                  show=True, n_jobs=1, average=False, line_alpha=None,
                  spatial_colors=True, sphere=None, window='hamming',
-                 verbose=None):
+                 exclude='bads', verbose=None):
         return plot_raw_psd(self, fmin=fmin, fmax=fmax, tmin=tmin, tmax=tmax,
                             proj=proj, n_fft=n_fft, n_overlap=n_overlap,
                             reject_by_annotation=reject_by_annotation,
@@ -1469,7 +1546,7 @@ class BaseRaw(ProjMixin, ContainsMixin, UpdateChannelsMixin, SetChannelsMixin,
                             dB=dB, estimate=estimate, show=show, n_jobs=n_jobs,
                             average=average, line_alpha=line_alpha,
                             spatial_colors=spatial_colors, sphere=sphere,
-                            window=window, verbose=verbose)
+                            window=window, exclude=exclude, verbose=verbose)
 
     @copy_function_doc_to_method_doc(plot_raw_psd_topo)
     def plot_psd_topo(self, tmin=0., tmax=None, fmin=0, fmax=100, proj=False,
@@ -1674,6 +1751,17 @@ class BaseRaw(ProjMixin, ContainsMixin, UpdateChannelsMixin, SetChannelsMixin,
              % (name, len(self.ch_names), self.n_times, self.times[-1],
                 size_str))
         return "<%s | %s>" % (self.__class__.__name__, s)
+
+    def _repr_html_(self, caption=None):
+        basenames = [
+            os.path.basename(f) for f in self._filenames if f is not None
+        ]
+        m, s = divmod(self._last_time - self.first_time, 60)
+        h, m = divmod(m, 60)
+        duration = f'{int(h):02d}:{int(m):02d}:{int(s):02d}'
+        return raw_template.substitute(
+            info_repr=self.info._repr_html_(caption=caption),
+            filenames=basenames, duration=duration)
 
     def add_events(self, events, stim_channel=None, replace=False):
         """Add events to stim channel.
@@ -1899,6 +1987,113 @@ def _convert_slice(sel):
         return sel
 
 
+def _get_ch_factors(inst, units, picks_idxs):
+    """Get scaling factors for data, given units.
+
+    Parameters
+    ----------
+    inst : instance of Raw | Epochs | Evoked
+        The instance.
+    %(units)s
+    picks_idxs : ndarray
+        The picks as provided through _picks_to_idx.
+
+    Returns
+    -------
+    ch_factors : ndarray of floats, shape(len(picks),)
+        The sacling factors for each channel, ordered according
+        to picks.
+
+    """
+    _validate_type(units, types=(None, str, dict), item_name="units")
+    ch_factors = np.ones(len(picks_idxs))
+    si_units = _handle_default('si_units')
+    ch_types = inst.get_channel_types(picks=picks_idxs)
+    # Convert to dict if str units
+    if isinstance(units, str):
+        # Check that there is only one channel type
+        unit_ch_type = list(set(ch_types) & set(si_units.keys()))
+        if len(unit_ch_type) > 1:
+            raise ValueError('"units" cannot be str if there is more than '
+                             'one channel type with a unit '
+                             f'{unit_ch_type}.')
+        units = {unit_ch_type[0]: units}  # make the str argument a dict
+    # Loop over the dict to get channel factors
+    if isinstance(units, dict):
+        for ch_type, ch_unit in units.items():
+            # Get the scaling factors
+            scaling = _get_scaling(ch_type, ch_unit)
+            if scaling != 1:
+                indices = [i_ch for i_ch, ch in enumerate(ch_types)
+                           if ch == ch_type]
+                ch_factors[indices] *= scaling
+
+    return ch_factors
+
+
+def _get_scaling(ch_type, target_unit):
+    """Return the scaling factor based on the channel type and a target unit.
+
+    Parameters
+    ----------
+    ch_type : str
+        The channel type.
+    target_unit : str
+        The target unit for the provided channel type.
+
+    Returns
+    -------
+    scaling : float
+        The scaling factor to convert from the si_unit (used by default for MNE
+        objects) to the target unit.
+    """
+    scaling = 1.
+    si_units = _handle_default('si_units')
+    si_units_splitted = {key: si_units[key].split('/') for key in si_units}
+    prefixes = _handle_default('prefixes')
+    prefix_list = list(prefixes.keys())
+
+    # Check that the provided unit exists for the ch_type
+    unit_list = target_unit.split('/')
+    if ch_type not in si_units.keys():
+        raise KeyError(
+            f'{ch_type} is not a channel type that can be scaled '
+            'from units.')
+    si_unit_list = si_units_splitted[ch_type]
+    if len(unit_list) != len(si_unit_list):
+        raise ValueError(
+            f'{target_unit} is not a valid unit for {ch_type}, use a '
+            f'sub-multiple of {si_units[ch_type]} instead.')
+    for i, unit in enumerate(unit_list):
+        valid = [prefix + si_unit_list[i]
+                 for prefix in prefix_list]
+        if unit not in valid:
+            raise ValueError(
+                f'{target_unit} is not a valid unit for {ch_type}, use a '
+                f'sub-multiple of {si_units[ch_type]} instead.')
+
+    # Get the scaling factors
+    for i, unit in enumerate(unit_list):
+        has_square = False
+        # XXX power normally not used as csd cannot get_data()
+        if unit[-1] == '²':
+            has_square = True
+        if unit == 'm' or unit == 'm²':
+            factor = 1.
+        elif unit[0] in prefixes.keys():
+            factor = prefixes[unit[0]]
+        else:
+            factor = 1.
+        if factor != 1:
+            if has_square:
+                factor *= factor
+            if i == 0:
+                scaling = scaling * factor
+            elif i == 1:
+                scaling = scaling / factor
+    return scaling
+
+
 class _ReadSegmentFileProtector(object):
     """Ensure only _filenames, _raw_extras, and _read_segment_file are used."""
 
@@ -2080,7 +2275,7 @@ def _write_raw_fid(raw, info, picks, fid, cals, part_idx, start, stop,
             logger.info('Skipping data chunk due to small buffer ... '
                         '[done]')
             break
-        logger.debug('Writing ...')
+        logger.debug(f'Writing FIF {first:6d} ... {last:6d} ...')
         _write_raw_buffer(fid, data, cals, fmt)
 
         pos = fid.tell()
@@ -2128,6 +2323,7 @@ def _write_raw_fid(raw, info, picks, fid, cals, part_idx, start, stop,
     return final_fname
 
 
+@fill_doc
 def _start_writing_raw(name, info, sel, data_type,
                        reset_range, annotations):
     """Start write raw data in file.
@@ -2136,8 +2332,7 @@ def _start_writing_raw(name, info, sel, data_type,
     ----------
     name : string
         Name of the file to create.
-    info : dict
-        Measurement info.
+    %(info_not_none)s
     sel : array of int | None
         Indices of channels to include. If None, all channels
         are included.
@@ -2167,7 +2362,6 @@ def _start_writing_raw(name, info, sel, data_type,
     fid = start_file(name)
     start_block(fid, FIFF.FIFFB_MEAS)
     write_id(fid, FIFF.FIFF_BLOCK_ID)
-    # XXX do we need this?
     if info['meas_id'] is not None:
         write_id(fid, FIFF.FIFF_PARENT_BLOCK_ID, info['meas_id'])
 
@@ -2252,13 +2446,13 @@ def _check_raw_compatibility(raw):
     """Ensure all instances of Raw have compatible parameters."""
     for ri in range(1, len(raw)):
         if not isinstance(raw[ri], type(raw[0])):
-            raise ValueError('raw[%d] type must match' % ri)
-        if not raw[ri].info['nchan'] == raw[0].info['nchan']:
-            raise ValueError('raw[%d][\'info\'][\'nchan\'] must match' % ri)
-        if not raw[ri].info['bads'] == raw[0].info['bads']:
-            raise ValueError('raw[%d][\'info\'][\'bads\'] must match' % ri)
-        if not raw[ri].info['sfreq'] == raw[0].info['sfreq']:
-            raise ValueError('raw[%d][\'info\'][\'sfreq\'] must match' % ri)
+            raise ValueError(f'raw[{ri}] type must match')
+        for key in ('nchan', 'bads', 'sfreq'):
+            a, b = raw[ri].info[key], raw[0].info[key]
+            if a != b:
+                raise ValueError(
+                    f'raw[{ri}].info[{key}] must match:\n'
+                    f'{repr(a)} != {repr(b)}')
         if not set(raw[ri].info['ch_names']) == set(raw[0].info['ch_names']):
             raise ValueError('raw[%d][\'info\'][\'ch_names\'] must match' % ri)
         if not all(raw[ri]._cals == raw[0]._cals):
@@ -2275,7 +2469,8 @@ def _check_raw_compatibility(raw):
 
 
 @verbose
-def concatenate_raws(raws, preload=None, events_list=None, verbose=None):
+def concatenate_raws(raws, preload=None, events_list=None, *,
+                     on_mismatch='raise', verbose=None):
     """Concatenate raw instances as if they were continuous.
 
     .. note:: ``raws[0]`` is modified in-place to achieve the concatenation.
@@ -2287,10 +2482,11 @@ def concatenate_raws(raws, preload=None, events_list=None, verbose=None):
     Parameters
     ----------
     raws : list
-        List of Raw instances to concatenate (in order).
+        List of `~mne.io.Raw` instances to concatenate (in order).
     %(preload_concatenate)s
     events_list : None | list
-        The events to concatenate. Defaults to None.
+        The events to concatenate. Defaults to ``None``.
+    %(on_info_mismatch)s
     %(verbose)s
 
     Returns
@@ -2300,6 +2496,10 @@ def concatenate_raws(raws, preload=None, events_list=None, verbose=None):
     events : ndarray of int, shape (n_events, 3)
         The events. Only returned if ``event_list`` is not None.
     """
+    for idx, raw in enumerate(raws[1:], start=1):
+        _ensure_infos_match(info1=raws[0].info, info2=raw.info,
+                            name=f'raws[{idx}]', on_mismatch=on_mismatch)
+
     if events_list is not None:
         if len(events_list) != len(raws):
             raise ValueError('`raws` and `event_list` are required '

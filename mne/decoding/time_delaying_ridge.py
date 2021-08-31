@@ -3,7 +3,7 @@
 # Authors: Eric Larson <larson.eric.d@gmail.com>
 #          Ross Maddox <ross.maddox@rochester.edu>
 #
-# License: BSD (3-clause)
+# License: BSD-3-Clause
 
 import numpy as np
 
@@ -343,6 +343,8 @@ class TimeDelayingRidge(BaseEstimator):
         X : ndarray
             The predicted response.
         """
+        from scipy.signal import fftconvolve
+
         if X.ndim == 2:
             X = X[:, np.newaxis, :]
             singleton = True
@@ -354,7 +356,7 @@ class TimeDelayingRidge(BaseEstimator):
         for ei in range(X.shape[1]):
             for oi in range(self.coef_.shape[0]):
                 for fi in range(self.coef_.shape[1]):
-                    temp = np.convolve(X[:, ei, fi], self.coef_[oi, fi])
+                    temp = fftconvolve(X[:, ei, fi], self.coef_[oi, fi])
                     temp = temp[max(-smin, 0):][:len(out) - offset]
                     out[offset:len(temp) + offset, ei, oi] += temp
         out += self.intercept_

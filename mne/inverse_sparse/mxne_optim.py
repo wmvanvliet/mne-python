@@ -9,7 +9,8 @@ from math import sqrt
 import numpy as np
 
 from .mxne_debiasing import compute_bias
-from ..utils import logger, verbose, sum_squared, warn, _get_blas_funcs
+from ..utils import (logger, verbose, sum_squared, warn, _get_blas_funcs,
+                     deprecated)
 from ..time_frequency._stft import stft_norm1, stft_norm2, stft, istft
 
 
@@ -42,6 +43,9 @@ def norm_l21(A, n_orient, copy=True):
     return np.sum(np.sqrt(groups_norm2(A, n_orient)))
 
 
+@deprecated(extra="Starting version v0.25, MxNE problems will be solved "
+                  "using exclusively (block) coordinate descent solvers. "
+                  "Prefer using solver=`bcd` or solver=`cd`.")
 def prox_l21(Y, alpha, n_orient, shape=None, is_stft=False):
     """Proximity operator for l21 norm.
 
@@ -118,7 +122,8 @@ def prox_l1(Y, alpha, n_orient):
 
     Please note that this function computes a soft-thresholding if
     n_orient == 1 and a block soft-thresholding (L2 over orientation and
-    L1 over position (space + time)) if n_orient == 3. See also [1]_.
+    L1 over position (space + time)) if n_orient == 3. See also
+    :footcite:`GramfortEtAl2013b`.
 
     Parameters
     ----------
@@ -138,11 +143,7 @@ def prox_l1(Y, alpha, n_orient):
 
     References
     ----------
-    .. [1] A. Gramfort, D. Strohmeier, J. Haueisen, M. Hämäläinen, M. Kowalski
-       "Time-Frequency Mixed-Norm Estimates: Sparse M/EEG imaging with
-       non-stationary source activations",
-       Neuroimage, Volume 70, pp. 410-422, 15 April 2013.
-       DOI: 10.1016/j.neuroimage.2012.12.051
+    .. footbibliography::
 
     Examples
     --------
@@ -176,8 +177,49 @@ def prox_l1(Y, alpha, n_orient):
     return Y, active_set
 
 
+def _primal_l21(M, G, X, active_set, alpha, n_orient):
+    """Primal objective for the mixed-norm inverse problem.
+
+    See :footcite:`GramfortEtAl2012`.
+
+    Parameters
+    ----------
+    M : array, shape (n_sensors, n_times)
+        The data.
+    G : array, shape (n_sensors, n_active)
+        The gain matrix a.k.a. lead field.
+    X : array, shape (n_active, n_times)
+        Sources.
+    active_set : array of bool, shape (n_sources,)
+        Mask of active sources.
+    alpha : float
+        The regularization parameter.
+    n_orient : int
+        Number of dipoles per locations (typically 1 or 3).
+
+    Returns
+    -------
+    p_obj : float
+        Primal objective.
+    R : array, shape (n_sensors, n_times)
+        Current residual (M - G * X).
+    nR2 : float
+        Data-fitting term.
+    GX : array, shape (n_sensors, n_times)
+        Forward prediction.
+    """
+    GX = np.dot(G[:, active_set], X)
+    R = M - GX
+    penalty = norm_l21(X, n_orient, copy=True)
+    nR2 = sum_squared(R)
+    p_obj = 0.5 * nR2 + alpha * penalty
+    return p_obj, R, nR2, GX
+
+
 def dgap_l21(M, G, X, active_set, alpha, n_orient):
     """Duality gap for the mixed norm inverse problem.
+
+    See :footcite:`GramfortEtAl2012`.
 
     Parameters
     ----------
@@ -207,17 +249,9 @@ def dgap_l21(M, G, X, active_set, alpha, n_orient):
 
     References
     ----------
-    .. [1] A. Gramfort, M. Kowalski, M. Hämäläinen,
-       "Mixed-norm estimates for the M/EEG inverse problem using accelerated
-       gradient methods", Physics in Medicine and Biology, 2012.
-       https://doi.org/10.1088/0031-9155/57/7/1937
+    .. footbibilography::
     """
-    GX = np.dot(G[:, active_set], X)
-    R = M - GX
-    penalty = norm_l21(X, n_orient, copy=True)
-    nR2 = sum_squared(R)
-    p_obj = 0.5 * nR2 + alpha * penalty
-
+    p_obj, R, nR2, GX = _primal_l21(M, G, X, active_set, alpha, n_orient)
     dual_norm = norm_l2inf(np.dot(G.T, R), n_orient, copy=False)
     scaling = alpha / dual_norm
     scaling = min(scaling, 1.0)
@@ -227,6 +261,9 @@ def dgap_l21(M, G, X, active_set, alpha, n_orient):
     return gap, p_obj, d_obj, R
 
 
+@deprecated(extra="Starting version v0.25, MxNE problems will be solved "
+                  "using exclusively (block) coordinate descent solvers. "
+                  "Prefer using solver=`bcd` or solver=`cd`.")
 @verbose
 def _mixed_norm_solver_prox(M, G, alpha, lipschitz_constant, maxit=200,
                             tol=1e-8, verbose=None, init=None, n_orient=1,
@@ -304,8 +341,7 @@ def _mixed_norm_solver_cd(M, G, alpha, lipschitz_constant, maxit=10000,
     assert M.ndim == G.ndim and M.shape[0] == G.shape[0]
 
     clf = MultiTaskLasso(alpha=alpha / len(M), tol=tol / sum_squared(M),
-                         normalize=False, fit_intercept=False, max_iter=maxit,
-                         warm_start=True)
+                         fit_intercept=False, max_iter=maxit, warm_start=True)
     if init is not None:
         clf.coef_ = init.T
     else:
@@ -322,10 +358,10 @@ def _mixed_norm_solver_cd(M, G, alpha, lipschitz_constant, maxit=10000,
 @verbose
 def _mixed_norm_solver_bcd(M, G, alpha, lipschitz_constant, maxit=200,
                            tol=1e-8, verbose=None, init=None, n_orient=1,
-                           dgap_freq=10):
+                           dgap_freq=10, use_accel=True, K=5):
     """Solve L21 inverse problem with block coordinate descent."""
-    n_sensors, n_times = M.shape
-    n_sensors, n_sources = G.shape
+    _, n_times = M.shape
+    _, n_sources = G.shape
     n_positions = n_sources // n_orient
 
     if init is None:
@@ -340,6 +376,10 @@ def _mixed_norm_solver_bcd(M, G, alpha, lipschitz_constant, maxit=200,
     active_set = np.zeros(n_sources, dtype=bool)  # start with full AS
 
     alpha_lc = alpha / lipschitz_constant
+
+    if use_accel:
+        last_K_X = np.empty((K + 1, n_sources, n_times))
+        U = np.zeros((K, n_sources * n_times))
 
     # First make G fortran for faster access to blocks of columns
     G = np.asfortranarray(G)
@@ -359,8 +399,7 @@ def _mixed_norm_solver_bcd(M, G, alpha, lipschitz_constant, maxit=200,
         list_G_j_c.append(np.ascontiguousarray(G[:, idx]))
 
     for i in range(maxit):
-        _bcd(G, X, R, active_set, one_ovr_lc, n_orient, n_positions,
-             alpha_lc, list_G_j_c)
+        _bcd(G, X, R, active_set, one_ovr_lc, n_orient, alpha_lc, list_G_j_c)
 
         if (i + 1) % dgap_freq == 0:
             _, p_obj, d_obj, _ = dgap_l21(M, G, X[active_set], active_set,
@@ -376,13 +415,50 @@ def _mixed_norm_solver_bcd(M, G, alpha, lipschitz_constant, maxit=200,
                              % (gap, tol))
                 break
 
+        # using Anderson acceleration of the primal variable for faster
+        # convergence
+        if use_accel:
+            last_K_X[i % (K + 1)] = X
+
+            if i % (K + 1) == K:
+                for k in range(K):
+                    U[k] = last_K_X[k + 1].ravel() - last_K_X[k].ravel()
+                C = U @ U.T
+                one_vec = np.ones(K)
+
+                try:
+                    z = np.linalg.solve(C, one_vec)
+                except np.linalg.LinAlgError:
+                    # Matrix C is not always expected to be non-singular. If C
+                    # is singular, acceleration is not used at this iteration
+                    # and the solver proceeds with the non-sped-up code.
+                    logger.debug("Iteration %d: LinAlg Error" % (i + 1))
+                else:
+                    c = z / z.sum()
+                    X_acc = np.sum(
+                        last_K_X[:-1] * c[:, None, None], axis=0
+                    )
+                    _grp_norm2_acc = groups_norm2(X_acc, n_orient)
+                    active_set_acc = _grp_norm2_acc != 0
+                    if n_orient > 1:
+                        active_set_acc = np.kron(
+                            active_set_acc, np.ones(n_orient, dtype=bool)
+                        )
+                    p_obj = _primal_l21(M, G, X[active_set], active_set, alpha,
+                                        n_orient)[0]
+                    p_obj_acc = _primal_l21(M, G, X_acc[active_set_acc],
+                                            active_set_acc, alpha, n_orient)[0]
+                    if p_obj_acc < p_obj:
+                        X = X_acc
+                        active_set = active_set_acc
+                        R = M - G[:, active_set] @ X[active_set]
+
     X = X[active_set]
 
     return X, active_set, E
 
 
-def _bcd(G, X, R, active_set, one_ovr_lc, n_orient, n_positions,
-         alpha_lc, list_G_j_c):
+def _bcd(G, X, R, active_set, one_ovr_lc, n_orient, alpha_lc, list_G_j_c):
     """Implement one full pass of BCD.
 
     BCD stands for Block Coordinate Descent.
@@ -407,7 +483,7 @@ def _bcd(G, X, R, active_set, one_ovr_lc, n_orient, n_positions,
     alpha_lc: array, shape (n_positions, )
         alpha * (Lipschitz constants).
     """
-    X_j_new = np.zeros_like(X[0:n_orient, :], order='C')
+    X_j_new = np.zeros_like(X[:n_orient, :], order='C')
     dgemm = _get_dgemm()
 
     for j, G_j_c in enumerate(list_G_j_c):
@@ -442,8 +518,12 @@ def _bcd(G, X, R, active_set, one_ovr_lc, n_orient, n_positions,
 @verbose
 def mixed_norm_solver(M, G, alpha, maxit=3000, tol=1e-8, verbose=None,
                       active_set_size=50, debias=True, n_orient=1,
-                      solver='auto', return_gap=False, dgap_freq=10):
+                      solver='auto', return_gap=False, dgap_freq=10,
+                      active_set_init=None, X_init=None):
     """Solve L1/L2 mixed-norm inverse problem with active set strategy.
+
+    See references :footcite:`GramfortEtAl2012,StrohmeierEtAl2016,
+    BertrandEtAl2020`.
 
     Parameters
     ----------
@@ -466,19 +546,27 @@ def mixed_norm_solver(M, G, alpha, maxit=3000, tol=1e-8, verbose=None,
     n_orient : int
         The number of orientation (1 : fixed or 3 : free or loose).
     solver : 'prox' | 'cd' | 'bcd' | 'auto'
-        The algorithm to use for the optimization.
+        The algorithm to use for the optimization. Block Coordinate Descent
+        (BCD) uses Anderson acceleration for faster convergence.
     return_gap : bool
         Return final duality gap.
     dgap_freq : int
         The duality gap is computed every dgap_freq iterations of the solver on
         the active set.
+    active_set_init : array, shape (n_dipoles,) or None
+        The initial active set (boolean array) used at the first iteration.
+        If None, the usual active set strategy is applied.
+    X_init : array, shape (n_dipoles, n_times) or None
+        The initial weight matrix used for warm starting the solver. If None,
+        the weights are initialized at zero.
 
     Returns
     -------
     X : array, shape (n_active, n_times)
         The source estimates.
-    active_set : array
-        The mask of active sources.
+    active_set : array, shape (new_active_set_size,)
+        The mask of active sources. Note that new_active_set_size is the size
+        of the active set after convergence of the solver.
     E : list
         The value of the objective function over the iterations.
     gap : float
@@ -486,22 +574,15 @@ def mixed_norm_solver(M, G, alpha, maxit=3000, tol=1e-8, verbose=None,
 
     References
     ----------
-    .. [1] A. Gramfort, M. Kowalski, M. Hämäläinen,
-       "Mixed-norm estimates for the M/EEG inverse problem using accelerated
-       gradient methods", Physics in Medicine and Biology, 2012.
-       https://doi.org/10.1088/0031-9155/57/7/1937
-
-    .. [2] D. Strohmeier, Y. Bekhti, J. Haueisen, A. Gramfort,
-       "The Iterative Reweighted Mixed-Norm Estimate for Spatio-Temporal
-       MEG/EEG Source Reconstruction", IEEE Transactions of Medical Imaging,
-       Volume 35 (10), pp. 2218-2228, 15 April 2013.
+    .. footbibliography::
     """
     n_dipoles = G.shape[1]
     n_positions = n_dipoles // n_orient
-    n_sensors, n_times = M.shape
+    _, n_times = M.shape
     alpha_max = norm_l2inf(np.dot(G.T, M), n_orient, copy=False)
     logger.info("-- ALPHA MAX : %s" % alpha_max)
     alpha = float(alpha)
+    X = np.zeros((n_dipoles, n_times), dtype=G.dtype)
 
     has_sklearn = True
     try:
@@ -549,8 +630,10 @@ def mixed_norm_solver(M, G, alpha, maxit=3000, tol=1e-8, verbose=None,
     if active_set_size is not None:
         E = list()
         highest_d_obj = - np.inf
-        X_init = None
-        active_set = np.zeros(n_dipoles, dtype=bool)
+        if X_init is not None and X_init.shape != (n_dipoles, n_times):
+            raise ValueError('Wrong dim for initialized coefficients.')
+        active_set = (active_set_init if active_set_init is not None else
+                      np.zeros(n_dipoles, dtype=bool))
         idx_large_corr = np.argsort(groups_norm2(np.dot(G.T, M), n_orient))
         new_active_idx = idx_large_corr[-active_set_size:]
         if n_orient > 1:
@@ -558,6 +641,7 @@ def mixed_norm_solver(M, G, alpha, maxit=3000, tol=1e-8, verbose=None,
                               np.arange(n_orient)[None, :]).ravel()
         active_set[new_active_idx] = True
         as_size = np.sum(active_set)
+        gap = np.inf
         for k in range(maxit):
             if solver == 'bcd':
                 lc_tmp = lc[active_set[::n_orient]]
@@ -576,7 +660,7 @@ def mixed_norm_solver(M, G, alpha, maxit=3000, tol=1e-8, verbose=None,
             highest_d_obj = max(d_obj, highest_d_obj)
             gap = p_obj - highest_d_obj
             E.append(p_obj)
-            logger.info("Iteration %d :: p_obj %f :: dgap %f ::"
+            logger.info("Iteration %d :: p_obj %f :: dgap %f :: "
                         "n_active_start %d :: n_active_end %d" % (
                             k + 1, p_obj, gap, as_size // n_orient,
                             np.sum(active_set) // n_orient))
@@ -624,8 +708,10 @@ def mixed_norm_solver(M, G, alpha, maxit=3000, tol=1e-8, verbose=None,
 def iterative_mixed_norm_solver(M, G, alpha, n_mxne_iter, maxit=3000,
                                 tol=1e-8, verbose=None, active_set_size=50,
                                 debias=True, n_orient=1, dgap_freq=10,
-                                solver='auto'):
+                                solver='auto', weight_init=None):
     """Solve L0.5/L2 mixed-norm inverse problem with active set strategy.
+
+    See reference :footcite:`StrohmeierEtAl2016`.
 
     Parameters
     ----------
@@ -654,6 +740,9 @@ def iterative_mixed_norm_solver(M, G, alpha, n_mxne_iter, maxit=3000,
         The duality gap is evaluated every dgap_freq iterations.
     solver : 'prox' | 'cd' | 'bcd' | 'auto'
         The algorithm to use for the optimization.
+    weight_init : array, shape (n_dipoles,) or None
+        The initial weight used for reweighting the gain matrix. If None, the
+        weights are initialized with ones.
 
     Returns
     -------
@@ -666,10 +755,7 @@ def iterative_mixed_norm_solver(M, G, alpha, n_mxne_iter, maxit=3000,
 
     References
     ----------
-    .. [1] D. Strohmeier, Y. Bekhti, J. Haueisen, A. Gramfort,
-       "The Iterative Reweighted Mixed-Norm Estimate for Spatio-Temporal
-       MEG/EEG Source Reconstruction", IEEE Transactions of Medical Imaging,
-       Volume 35 (10), pp. 2218-2228, 2016.
+    .. footbibliography::
     """
     def g(w):
         return np.sqrt(np.sqrt(groups_norm2(w.copy(), n_orient)))
@@ -679,8 +765,13 @@ def iterative_mixed_norm_solver(M, G, alpha, n_mxne_iter, maxit=3000,
 
     E = list()
 
-    active_set = np.ones(G.shape[1], dtype=bool)
-    weights = np.ones(G.shape[1])
+    if weight_init is not None and weight_init.shape != (G.shape[1],):
+        raise ValueError('Wrong dimension for weight initialization. Got %s. '
+                         'Expected %s.' % (weight_init.shape, (G.shape[1],)))
+
+    weights = weight_init if weight_init is not None else np.ones(G.shape[1])
+    active_set = (weights != 0)
+    weights = weights[active_set]
     X = np.zeros((G.shape[1], M.shape[1]))
 
     for k in range(n_mxne_iter):
@@ -709,7 +800,6 @@ def iterative_mixed_norm_solver(M, G, alpha, n_mxne_iter, maxit=3000,
 
         if _active_set.sum() > 0:
             active_set[active_set] = _active_set
-
             # Reapply weights to have correct unit
             X *= weights[_active_set][:, np.newaxis]
             weights = gprime(X)
@@ -893,7 +983,8 @@ def norm_epsilon(Y, l1_ratio, phi, w_space=1., w_time=None):
     Warning: it takes into account the fact that Y only contains coefficients
     corresponding to the positive frequencies (see `stft_norm2()`): some
     entries will be counted twice. It is also assumed that all entries of both
-    Y and w_time are non-negative.
+    Y and w_time are non-negative. See
+    :footcite:`NdiayeEtAl2016,BurdakovMerkulov2001`.
 
     Parameters
     ----------
@@ -918,13 +1009,7 @@ def norm_epsilon(Y, l1_ratio, phi, w_space=1., w_time=None):
 
     References
     ----------
-    .. [1] E. Ndiaye, O. Fercoq, A. Gramfort, J. Salmon,
-       "GAP Safe Screening Rules for Sparse-Group Lasso", Advances in Neural
-       Information Processing Systems (NIPS), 2016.
-
-    .. [2] O. Burdakov, B. Merkulov,
-       "On a new norm for data fitting and optimization problems",
-       LiTH-MAT, 2001.
+    .. footbibliography::
     """
     # since the solution is invariant to flipped signs in Y, all entries
     # of Y are assumed positive
@@ -1059,6 +1144,8 @@ def dgap_l21l1(M, G, Z, active_set, alpha_space, alpha_time, phi, phiT,
                n_orient, highest_d_obj, w_space=None, w_time=None):
     """Duality gap for the time-frequency mixed norm inverse problem.
 
+    See :footcite:`GramfortEtAl2012,NdiayeEtAl2016`
+
     Parameters
     ----------
     M : array, shape (n_sensors, n_times)
@@ -1100,14 +1187,7 @@ def dgap_l21l1(M, G, Z, active_set, alpha_space, alpha_time, phi, phiT,
 
     References
     ----------
-    .. [1] A. Gramfort, M. Kowalski, M. Hämäläinen,
-       "Mixed-norm estimates for the M/EEG inverse problem using accelerated
-       gradient methods", Physics in Medicine and Biology, 2012.
-       https://doi.org/10.1088/0031-9155/57/7/1937
-
-    .. [2] E. Ndiaye, O. Fercoq, A. Gramfort, J. Salmon,
-       "GAP Safe Screening Rules for Sparse-Group Lasso", Advances in Neural
-       Information Processing Systems (NIPS), 2016.
+    .. footbibliography::
     """
     X = phiT(Z)
     GX = np.dot(G[:, active_set], X)
@@ -1352,6 +1432,8 @@ def tf_mixed_norm_solver(M, G, alpha_space, alpha_time, wsize=64, tstep=4,
                          dgap_freq=10, verbose=None):
     """Solve TF L21+L1 inverse solver with BCD and active set approach.
 
+    See :footcite:`GramfortEtAl2013b,GramfortEtAl2011,BekhtiEtAl2016`.
+
     Parameters
     ----------
     M : array, shape (n_sensors, n_times)
@@ -1403,24 +1485,7 @@ def tf_mixed_norm_solver(M, G, alpha_space, alpha_time, wsize=64, tstep=4,
 
     References
     ----------
-    .. [1] A. Gramfort, D. Strohmeier, J. Haueisen, M. Hämäläinen, M. Kowalski
-       "Time-Frequency Mixed-Norm Estimates: Sparse M/EEG imaging with
-       non-stationary source activations",
-       Neuroimage, Volume 70, pp. 410-422, 15 April 2013.
-       DOI: 10.1016/j.neuroimage.2012.12.051
-
-    .. [2] A. Gramfort, D. Strohmeier, J. Haueisen, M. Hämäläinen, M. Kowalski
-       "Functional Brain Imaging with M/EEG Using Structured Sparsity in
-       Time-Frequency Dictionaries",
-       Proceedings Information Processing in Medical Imaging
-       Lecture Notes in Computer Science, Volume 6801/2011, pp. 600-611, 2011.
-       DOI: 10.1007/978-3-642-22092-0_49
-
-    .. [3] Y. Bekhti, D. Strohmeier, M. Jas, R. Badeau, A. Gramfort.
-       "M/EEG source localization with multiscale time-frequency dictionaries",
-       6th International Workshop on Pattern Recognition in Neuroimaging
-       (PRNI), 2016.
-       DOI: 10.1109/PRNI.2016.7552337
+    .. footbibliography::
     """
     n_sensors, n_times = M.shape
     n_sensors, n_sources = G.shape
@@ -1510,7 +1575,7 @@ def iterative_tf_mixed_norm_solver(M, G, alpha_space, alpha_time,
         The duality gap is evaluated every dgap_freq iterations.
     verbose : bool, str, int, or None
         If not None, override default verbose level (see :func:`mne.verbose`
-        and :ref:`Logging documentation <tut_logging>` for more).
+        and :ref:`Logging documentation <tut-logging>` for more).
 
     Returns
     -------

@@ -1,12 +1,11 @@
 # Authors : Denis A. Engemann <denis.engemann@gmail.com>
 #           Alexandre Gramfort <alexandre.gramfort@inria.fr>
 #
-# License : BSD 3-clause
+# License : BSD-3-Clause
 
 from copy import deepcopy
 
 import numpy as np
-# XXX explore cuda optimization at some point.
 
 from ..fixes import _import_fft
 from ..io.pick import _pick_data_channels, pick_info

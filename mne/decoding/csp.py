@@ -5,7 +5,7 @@
 #          Clemens Brunner <clemens.brunner@gmail.com>
 #          Jean-Remi King <jeanremi.king@gmail.com>
 #
-# License: BSD (3-clause)
+# License: BSD-3-Clause
 
 import copy as cp
 
@@ -14,6 +14,7 @@ import numpy as np
 from .base import BaseEstimator
 from .mixin import TransformerMixin
 from ..cov import _regularized_covariance
+from ..fixes import pinv
 from ..utils import fill_doc, _check_option, _validate_type
 
 
@@ -159,7 +160,6 @@ class CSP(TransformerMixin, BaseEstimator):
         self : instance of CSP
             Returns the modified instance.
         """
-        from scipy import linalg
         self._check_Xy(X, y)
 
         self._classes = np.unique(y)
@@ -181,7 +181,7 @@ class CSP(TransformerMixin, BaseEstimator):
         eigen_vectors = eigen_vectors[:, ix]
 
         self.filters_ = eigen_vectors.T
-        self.patterns_ = linalg.pinv2(eigen_vectors)
+        self.patterns_ = pinv(eigen_vectors)
 
         pick_filters = self.filters_[:self.n_components]
         X = np.asarray([np.dot(pick_filters, epoch) for epoch in X])
@@ -247,9 +247,8 @@ class CSP(TransformerMixin, BaseEstimator):
 
         Parameters
         ----------
-        info : instance of Info
-            Info dictionary of the epochs used for fitting.
-            If not possible, consider using ``create_info``.
+        %(info_not_none)s Used for fitting. If not available, consider using
+            :func:`mne.create_info`.
         components : float | array of float | None
            The patterns to plot. If None, n_components will be shown.
         ch_type : 'mag' | 'grad' | 'planar1' | 'planar2' | 'eeg' | None
@@ -309,15 +308,8 @@ class CSP(TransformerMixin, BaseEstimator):
             only significant sensors will be shown.
         title : str | None
             Title. If None (default), no title is displayed.
-        mask : ndarray of bool, shape (n_channels, n_times) | None
-            The channels to be marked as significant at a given time point.
-            Indices set to `True` will be considered. Defaults to None.
-        mask_params : dict | None
-            Additional plotting parameters for plotting significant sensors.
-            Default (None) equals::
-
-                dict(marker='o', markerfacecolor='w', markeredgecolor='k',
-                     linewidth=0, markersize=4)
+        %(patterns_topomap_mask)s
+        %(topomap_mask_params)s
         %(topomap_outlines)s
         contours : int | array of float
             The number of contour lines to draw. If 0, no contours will be
@@ -375,9 +367,8 @@ class CSP(TransformerMixin, BaseEstimator):
 
         Parameters
         ----------
-        info : instance of Info
-            Info dictionary of the epochs used for fitting.
-            If not possible, consider using ``create_info``.
+        %(info_not_none)s Used for fitting. If not available, consider using
+            :func:`mne.create_info`.
         components : float | array of float | None
            The patterns to plot. If None, n_components will be shown.
         ch_type : 'mag' | 'grad' | 'planar1' | 'planar2' | 'eeg' | None

@@ -8,8 +8,9 @@ Documentation overview
 .. note::
 
    If you haven't already installed Python and MNE-Python, here are the
-   :doc:`installation instructions <install/index>`, and some resources for
-   :doc:`learn_python`.
+   installation instructions for :ref:`Python <install-python>` and
+   :ref:`MNE-Python <standard_instructions>`, and some
+   resources for :doc:`learn_python`.
 
 
 The documentation for MNE-Python is divided into four main sections:

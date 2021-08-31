@@ -1,4 +1,7 @@
-name: 'linux / pip'
+name: 'linux / pip-pre'
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.number }}
+  cancel-in-progress: true
 on:
   push:
     branches:
@@ -8,24 +11,9 @@ on:
       - '*'
 
 jobs:
-  check_skip:
-    runs-on: ubuntu-20.04
-    outputs:
-      skip: ${{ steps.result_step.outputs.ci-skip }}
-    steps:
-      - uses: actions/checkout@v2
-        with:
-          fetch-depth: 0
-      - id: result_step
-        uses: mstachniuk/ci-skip@master
-        with:
-          commit-filter: '[skip ci];[ci skip];[skip github]'
-          commit-filter-separator: ';'
-
-  # PIP + non-default stim channel + log level info
+  # PIP-pre + non-default stim channel + log level info
   job:
-    needs: check_skip
-    if: ${{ needs.check_skip.outputs.skip == 'false' }}
+    timeout-minutes: 90
     name: 'py3.9'
     runs-on: ubuntu-20.04
     defaults:

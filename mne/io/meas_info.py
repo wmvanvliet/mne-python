@@ -4,7 +4,7 @@
 #          Teon Brooks <teon.brooks@gmail.com>
 #          Stefan Appelhoff <stefan.appelhoff@mailbox.org>
 #
-# License: BSD (3-clause)
+# License: BSD-3-Clause
 
 from collections import Counter, OrderedDict
 import contextlib
@@ -17,14 +17,14 @@ from textwrap import shorten
 import numpy as np
 
 from .pick import (channel_type, pick_channels, pick_info,
-                   get_channel_type_constants)
+                   get_channel_type_constants, pick_types)
 from .constants import FIFF, _coord_frame_named
 from .open import fiff_open
 from .tree import dir_tree_find
 from .tag import (read_tag, find_tag, _ch_coord_dict, _update_ch_info_named,
                   _rename_list)
 from .proj import (_read_proj, _write_proj, _uniquify_projs, _normalize_proj,
-                   Projection)
+                   _proj_equal, Projection)
 from .ctf_comp import _read_ctf_comp, write_ctf_comp
 from .write import (start_file, end_file, start_block, end_block,
                     write_string, write_dig_points, write_float, write_int,
@@ -34,11 +34,12 @@ from .proc_history import _read_proc_history, _write_proc_history
 from ..transforms import invert_transform, Transform, _coord_frame_name
 from ..utils import (logger, verbose, warn, object_diff, _validate_type,
                      _stamp_to_dt, _dt_to_stamp, _pl, _is_numeric,
-                     _check_option)
+                     _check_option, _on_missing, _check_on_missing, fill_doc)
 from ._digitization import (_format_dig_points, _dig_kind_proper, DigPoint,
                             _dig_kind_rev, _dig_kind_ints, _read_dig_fif)
 from ._digitization import write_dig as _dig_write_dig
 from .compensator import get_current_comp
+from ..data.html_templates import info_template
 
 b = bytes  # alias
 
@@ -142,7 +143,7 @@ class MontageMixin(object):
     @verbose
     def set_montage(self, montage, match_case=True, match_alias=False,
                     on_missing='raise', verbose=None):
-        """Set EEG sensor configuration and head digitization.
+        """Set %(montage_types)s channel positions and digitization points.
 
         Parameters
         ----------
@@ -160,6 +161,12 @@ class MontageMixin(object):
         Notes
         -----
         Operates in place.
+
+        .. warning::
+            Only %(montage_types)s channels can have their positions set using
+            a montage. Other channel types (e.g., MEG channels) should have
+            their positions defined properly using their data reading
+            functions.
         """
         # How to set up a montage to old named fif file (walk through example)
         # https://gist.github.com/massich/f6a9f4799f1fbeb8f5e8f8bc7b07d3df
@@ -193,7 +200,6 @@ def _check_ch_keys(ch, ci, name='info["chs"]', check_min=True):
                 f'key{_pl(bad)} missing for {name}[{ci}]: {bad}',)
 
 
-# XXX Eventually this should be de-duplicated with the MNE-MATLAB stuff...
 class Info(dict, MontageMixin):
     """Measurement information.
 
@@ -284,6 +290,8 @@ class Info(dict, MontageMixin):
         Tilt angle of the gantry in degrees.
     lowpass : float
         Lowpass corner frequency in Hertz.
+        It is automatically set to half the sampling rate if there is
+        otherwise no low-pass applied to the data.
     meas_date : datetime
         The time (UTC) of the recording.
 
@@ -726,7 +734,7 @@ class Info(dict, MontageMixin):
                     self['meas_date'].tzinfo is None or
                     self['meas_date'].tzinfo is not datetime.timezone.utc):
                 raise RuntimeError('%sinfo["meas_date"] must be a datetime '
-                                   'object in UTC or None, got "%r"'
+                                   'object in UTC or None, got %r'
                                    % (prepend_error, repr(self['meas_date']),))
 
         chs = [ch['ch_name'] for ch in self['chs']]
@@ -805,6 +813,41 @@ class Info(dict, MontageMixin):
     @property
     def ch_names(self):
         return self['ch_names']
+
+    def _repr_html_(self, caption=None):
+        if isinstance(caption, str):
+            html = f'<h4>{caption}</h4>'
+        else:
+            html = ''
+        n_eeg = len(pick_types(self, meg=False, eeg=True))
+        n_grad = len(pick_types(self, meg='grad'))
+        n_mag = len(pick_types(self, meg='mag'))
+        n_fnirs = len(pick_types(self, meg=False, eeg=False, fnirs=True))
+        pick_eog = pick_types(self, meg=False, eog=True)
+        if len(pick_eog) > 0:
+            eog = ', '.join(np.array(self['ch_names'])[pick_eog])
+        else:
+            eog = 'Not available'
+        pick_ecg = pick_types(self, meg=False, ecg=True)
+        if len(pick_ecg) > 0:
+            ecg = ', '.join(np.array(self['ch_names'])[pick_ecg])
+        else:
+            ecg = 'Not available'
+        meas_date = self['meas_date']
+        if meas_date is not None:
+            meas_date = meas_date.strftime("%B %d, %Y  %H:%M:%S") + ' GMT'
+        projs = self['projs']
+        if projs:
+            projs = '<br/>'.join(
+                p['desc'] + ': o%s' % {0: 'ff', 1: 'n'}[p['active']]
+                for p in projs
+            )
+
+        html += info_template.substitute(
+            caption=caption, info=self, meas_date=meas_date, n_eeg=n_eeg,
+            n_grad=n_grad, n_mag=n_mag, n_fnirs=n_fnirs, eog=eog, ecg=ecg,
+            projs=projs)
+        return html
 
 
 def _simplify_info(info):
@@ -911,8 +954,7 @@ def read_info(fname, verbose=None):
 
     Returns
     -------
-    info : instance of Info
-       Measurement information for the dataset.
+    %(info_not_none)s
     """
     f, tree, _ = fiff_open(fname)
     with f as fid:
@@ -970,8 +1012,7 @@ def read_meas_info(fid, tree, clean_bads=False, verbose=None):
 
     Returns
     -------
-    info : instance of Info
-       Info on dataset.
+    %(info_not_none)s
     meas : dict
         Node in tree that contains the info.
     """
@@ -1519,6 +1560,7 @@ def _check_dates(info, prepend_error=''):
                (np.iinfo('>i4').max, 0), meas_date_stamp[0],))
 
 
+@fill_doc
 def write_meas_info(fid, info, data_type=None, reset_range=True):
     """Write measurement info into a file id (from a fif file).
 
@@ -1526,8 +1568,7 @@ def write_meas_info(fid, info, data_type=None, reset_range=True):
     ----------
     fid : file
         Open file descriptor.
-    info : instance of Info
-        The measurement info structure.
+    %(info_not_none)s
     data_type : int
         The data_type in case it is necessary. Should be 4 (FIFFT_FLOAT),
         5 (FIFFT_DOUBLE), or 16 (FIFFT_DAU_PACK16) for
@@ -1771,6 +1812,7 @@ def write_meas_info(fid, info, data_type=None, reset_range=True):
     _write_proc_history(fid, info)
 
 
+@fill_doc
 def write_info(fname, info, data_type=None, reset_range=True):
     """Write measurement info in fif file.
 
@@ -1778,8 +1820,7 @@ def write_info(fname, info, data_type=None, reset_range=True):
     ----------
     fname : str
         The name of the file. Should end by -info.fif.
-    info : instance of Info
-        The measurement info structure.
+    %(info_not_none)s
     data_type : int
         The data_type in case it is necessary. Should be 4 (FIFFT_FLOAT),
         5 (FIFFT_DOUBLE), or 16 (FIFFT_DAU_PACK16) for
@@ -2004,8 +2045,7 @@ def create_info(ch_names, sfreq, ch_types='misc', verbose=None):
 
     Returns
     -------
-    info : instance of Info
-        The measurement info.
+    %(info_not_none)s
 
     Notes
     -----
@@ -2158,8 +2198,7 @@ def anonymize_info(info, daysback=None, keep_his=False, verbose=None):
 
     Parameters
     ----------
-    info : dict, instance of Info
-        Measurement information for the dataset.
+    %(info_not_none)s
     %(anonymize_info_parameters)s
     %(verbose)s
 
@@ -2178,23 +2217,23 @@ def anonymize_info(info, daysback=None, keep_his=False, verbose=None):
                                          tzinfo=datetime.timezone.utc)
     default_str = "mne_anonymize"
     default_subject_id = 0
+    default_sex = 0
     default_desc = ("Anonymized using a time shift"
                     " to preserve age at acquisition")
 
     none_meas_date = info['meas_date'] is None
 
     if none_meas_date:
-        warn('Input info has \'meas_date\' set to None.'
-             ' Removing all information from time/date structures.'
-             ' *NOT* performing any time shifts')
-        info['meas_date'] = None
+        if daysback is not None:
+            warn('Input info has "meas_date" set to None. '
+                 'Removing all information from time/date structures, '
+                 '*NOT* performing any time shifts!')
     else:
         # compute timeshift delta
         if daysback is None:
             delta_t = info['meas_date'] - default_anon_dos
         else:
             delta_t = datetime.timedelta(days=daysback)
-        # adjust meas_date
         info['meas_date'] = info['meas_date'] - delta_t
 
     # file_id and meas_id
@@ -2224,9 +2263,15 @@ def anonymize_info(info, daysback=None, keep_his=False, verbose=None):
         if subject_info.get('id') is not None:
             subject_info['id'] = default_subject_id
         if keep_his:
-            logger.info('Not fully anonymizing info - keeping \'his_id\'')
-        elif subject_info.get('his_id') is not None:
-            subject_info['his_id'] = str(default_subject_id)
+            logger.info('Not fully anonymizing info - keeping '
+                        'his_id, sex, and hand info')
+        else:
+            if subject_info.get('his_id') is not None:
+                subject_info['his_id'] = str(default_subject_id)
+            if subject_info.get('sex') is not None:
+                subject_info['sex'] = default_sex
+            if subject_info.get('hand') is not None:
+                del subject_info['hand']  # there's no "unknown" setting
 
         for key in ('last_name', 'first_name', 'middle_name'):
             if subject_info.get(key) is not None:
@@ -2302,13 +2347,13 @@ def anonymize_info(info, daysback=None, keep_his=False, verbose=None):
     return info
 
 
+@fill_doc
 def _bad_chans_comp(info, ch_names):
     """Check if channel names are consistent with current compensation status.
 
     Parameters
     ----------
-    info : dict, instance of Info
-        Measurement information for the dataset.
+    %(info_not_none)s
 
     ch_names : list of str
         The channel names to check.
@@ -2434,3 +2479,51 @@ def _write_ch_infos(fid, chs, reset_range, ch_names_mapping):
             for (key, (const, _, write)) in _CH_INFO_MAP.items():
                 write(fid, const, ch[key])
             end_block(fid, FIFF.FIFFB_CH_INFO)
+
+
+def _ensure_infos_match(info1, info2, name, *, on_mismatch='raise'):
+    """Check if infos match.
+
+    Parameters
+    ----------
+    info1, info2 : instance of Info
+        The infos to compare.
+    name : str
+        The name of the object appearing in the error message of the comparison
+        fails.
+    on_mismatch : 'raise' | 'warn' | 'ignore'
+        What to do in case of a mismatch of ``dev_head_t`` between ``info1``
+        and ``info2``.
+    """
+    _check_on_missing(on_missing=on_mismatch, name='on_mismatch')
+
+    info1._check_consistency()
+    info2._check_consistency()
+
+    if info1['nchan'] != info2['nchan']:
+        raise ValueError(f'{name}.info[\'nchan\'] must match')
+    if set(info1['bads']) != set(info2['bads']):
+        raise ValueError(f'{name}.info[\'bads\'] must match')
+    if info1['sfreq'] != info2['sfreq']:
+        raise ValueError(f'{name}.info[\'sfreq\'] must match')
+    if set(info1['ch_names']) != set(info2['ch_names']):
+        raise ValueError(f'{name}.info[\'ch_names\'] must match')
+    if len(info2['projs']) != len(info1['projs']):
+        raise ValueError(f'SSP projectors in {name} must be the same')
+    if any(not _proj_equal(p1, p2) for p1, p2 in
+           zip(info2['projs'], info1['projs'])):
+        raise ValueError(f'SSP projectors in {name} must be the same')
+    if (info1['dev_head_t'] is None) != (info2['dev_head_t'] is None) or \
+            (info1['dev_head_t'] is not None and not
+             np.allclose(info1['dev_head_t']['trans'],
+                         info2['dev_head_t']['trans'], rtol=1e-6)):
+        msg = (f"{name}.info['dev_head_t'] differs. The "
+               f"instances probably come from different runs, and "
+               f"are therefore associated with different head "
+               f"positions. Manually change info['dev_head_t'] to "
+               f"avoid this message but beware that this means the "
+               f"MEG sensors will not be properly spatially aligned. "
+               f"See mne.preprocessing.maxwell_filter to realign the "
+               f"runs to a common head position.")
+        _on_missing(on_missing=on_mismatch, msg=msg,
+                    name='on_mismatch')

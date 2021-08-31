@@ -2,7 +2,7 @@
 # Authors: MNE Developers
 #          Stefan Appelhoff <stefan.appelhoff@mailbox.org>
 #
-# License: BSD (3-clause)
+# License: BSD-3-Clause
 import os
 import os.path as op
 import sys
@@ -35,7 +35,7 @@ def test_check(tmpdir):
     """Test checking functions."""
     pytest.raises(ValueError, check_random_state, 'foo')
     pytest.raises(TypeError, _check_fname, 1)
-    _check_fname(Path('./'))
+    _check_fname(Path('./foo'))
     fname = str(tmpdir.join('foo'))
     with open(fname, 'wb'):
         pass

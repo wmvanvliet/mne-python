@@ -2,7 +2,7 @@
 """Testing functions."""
 # Authors: Alexandre Gramfort <alexandre.gramfort@inria.fr>
 #
-# License: BSD (3-clause)
+# License: BSD-3-Clause
 
 from contextlib import contextmanager
 from distutils.version import LooseVersion
@@ -22,12 +22,6 @@ from numpy.testing import assert_array_equal, assert_allclose
 
 from ._logging import warn, ClosingStringIO
 from .numerics import object_diff
-
-
-def nottest(f):
-    """Mark a function as not a test (decorator)."""
-    f.__test__ = False
-    return f
 
 
 def _explain_exception(start=-1, stop=None, prefix='> '):
@@ -249,18 +243,6 @@ def traits_test(test_func):
         with traits_test_context():
             return test_func(*args, **kwargs)
     return dec
-
-
-@nottest
-def run_tests_if_main():
-    """Run tests in a given file if it is run as a script."""
-    local_vars = inspect.currentframe().f_back.f_locals
-    if local_vars.get('__name__', '') != '__main__':
-        return
-    import pytest
-    code = pytest.main([local_vars['__file__'], '-v'])
-    if code:
-        raise AssertionError('pytest finished with errors (%d)' % (code,))
 
 
 def run_command_if_main():
@@ -539,17 +521,9 @@ def _click_ch_name(fig, ch_index=0, button=1):
     """Click on a channel name in a raw/epochs/ICA browse-style plot."""
     from ..viz.utils import _fake_click
     fig.canvas.draw()
-    x, y = fig.mne.ax_main.get_yticklabels()[ch_index].get_position()
-    xrange = np.diff(fig.mne.ax_main.get_xlim())[0]
-    _fake_click(fig, fig.mne.ax_main, (x - xrange / 50, y),
-                xform='data', button=button)
-
-
-def _close_event(fig):
-    """Force calling of the MPL figure close event."""
-    # XXX workaround: plt.close() doesn't spawn close_event on Agg backend
-    # (check MPL github issue #18609; scheduled to be fixed by MPL 3.4)
-    try:
-        fig.canvas.close_event()
-    except ValueError:  # old mpl with Qt
-        pass  # pragma: no cover
+    text = fig.mne.ax_main.get_yticklabels()[ch_index]
+    bbox = text.get_window_extent()
+    x = bbox.intervalx.mean()
+    y = bbox.intervaly.mean()
+    _fake_click(fig, fig.mne.ax_main, (x, y), xform='pix',
+                button=button)

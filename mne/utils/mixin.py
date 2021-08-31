@@ -2,7 +2,7 @@
 """Some utility functions."""
 # Authors: Alexandre Gramfort <alexandre.gramfort@inria.fr>
 #
-# License: BSD (3-clause)
+# License: BSD-3-Clause
 
 from collections import OrderedDict
 from copy import deepcopy
@@ -330,6 +330,8 @@ class GetEpochsMixin(object):
         event_id : int
             The event id. Only returned if ``return_event_id`` is ``True``.
         """
+        if not hasattr(self, '_current_detrend_picks'):
+            self.__iter__()  # ensure we're ready to iterate
         if self.preload:
             if self._current >= len(self._data):
                 self._stop_iter()

@@ -40,6 +40,7 @@ Projections:
    read_dig_egi
    read_dig_fif
    read_dig_hpts
+   read_dig_localite
    make_standard_montage
    read_custom_montage
    compute_dev_head_t
@@ -68,12 +69,15 @@ Projections:
 
    ICA
    Xdawn
+   annotate_break
    annotate_flat
    annotate_movement
    annotate_muscle_zscore
+   annotate_nan
    compute_average_dev_head_t
    compute_current_source_density
    compute_fine_calibration
+   compute_maxwell_basis
    compute_proj_ecg
    compute_proj_eog
    create_ecg_epochs
@@ -85,6 +89,7 @@ Projections:
    ica_find_ecg_events
    ica_find_eog_events
    infomax
+   equalize_bads
    maxwell_filter
    oversampled_temporal_projection
    peak_finder
@@ -155,11 +160,13 @@ EEG referencing:
    :toctree: generated/
 
    compute_chpi_amplitudes
+   compute_chpi_snr
    compute_chpi_locs
    compute_head_pos
    extract_chpi_locs_ctf
    extract_chpi_locs_kit
    filter_chpi
+   get_chpi_info
    head_pos_to_trans_rot_t
    read_head_pos
    write_head_pos

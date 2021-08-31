@@ -23,9 +23,10 @@ import numpy as np
 from copy import deepcopy
 from distutils.version import LooseVersion
 import warnings
+from datetime import datetime
 
 from ..defaults import _handle_default
-from ..fixes import _get_status
+from ..fixes import _get_args
 from ..io import show_fiff, Info
 from ..io.constants import FIFF
 from ..io.pick import (channel_type, channel_indices_by_type, pick_channels,
@@ -37,7 +38,8 @@ from ..io.meas_info import create_info
 from ..rank import compute_rank
 from ..io.proj import setup_proj
 from ..utils import (verbose, get_config, warn, _check_ch_locs, _check_option,
-                     logger, fill_doc, _pl, _check_sphere, _ensure_int)
+                     logger, fill_doc, _pl, _check_sphere, _ensure_int,
+                     _validate_type)
 from ..transforms import apply_trans
 
 
@@ -132,6 +134,7 @@ def tight_layout(pad=1.2, h_pad=None, w_pad=None, fig=None):
     This will not force constrained_layout=False if the figure was created
     with that method.
     """
+    _validate_type(pad, 'numeric', 'pad')
     import matplotlib.pyplot as plt
     fig = plt.gcf() if fig is None else fig
 
@@ -292,7 +295,7 @@ def _toggle_proj(event, params, all_=False):
     """Perform operations when proj boxes clicked."""
     # read options if possible
     if 'proj_checks' in params:
-        bools = _get_status(params['proj_checks'])
+        bools = list(params['proj_checks'].get_status())
         if all_:
             new_bools = [not all(bools)] * len(bools)
             with _events_off(params['proj_checks']):
@@ -362,7 +365,7 @@ def _make_event_color_dict(event_color, events=None, event_id=None):
 def _prepare_trellis(n_cells, ncols, nrows='auto', title=False, colorbar=False,
                      size=1.3, sharex=False, sharey=False):
     from matplotlib.gridspec import GridSpec
-    from ._figure import _figure
+    from ._mpl_figure import _figure
 
     if n_cells == 1:
         nrows = ncols = 1
@@ -555,11 +558,8 @@ def figure_nobar(*args, **kwargs):
     return fig
 
 
-def _show_help(col1, col2, width, height):
-    fig_help = figure_nobar(figsize=(width, height), dpi=80)
+def _show_help_fig(col1, col2, fig_help, ax, show):
     _set_window_title(fig_help, 'Help')
-
-    ax = fig_help.add_subplot(111)
     celltext = [[c1, c2] for c1, c2 in zip(col1.strip().split("\n"),
                                            col2.strip().split("\n"))]
     table = ax.table(cellText=celltext, loc="center", cellLoc="left")
@@ -575,12 +575,19 @@ def _show_help(col1, col2, width, height):
 
     fig_help.canvas.mpl_connect('key_press_event', _key_press)
 
-    # this should work for non-test cases
-    try:
-        fig_help.canvas.draw()
-        plt_show(fig=fig_help, warn=False)
-    except Exception:
-        pass
+    if show:
+        # this should work for non-test cases
+        try:
+            fig_help.canvas.draw()
+            plt_show(fig=fig_help, warn=False)
+        except Exception:
+            pass
+
+
+def _show_help(col1, col2, width, height):
+    fig_help = figure_nobar(figsize=(width, height), dpi=80)
+    ax = fig_help.add_subplot(111)
+    _show_help_fig(col1, col2, fig_help, ax, show=True)
 
 
 def _key_press(event):
@@ -808,8 +815,7 @@ def plot_sensors(info, kind='topomap', ch_type=None, title=None,
 
     Parameters
     ----------
-    info : instance of Info
-        Info structure containing the channel locations.
+    %(info_not_none)s
     kind : str
         Whether to plot the sensors as 3d, topomap or as an interactive
         sensor selection dialog. Available options 'topomap', '3d', 'select'.
@@ -1236,15 +1242,15 @@ class DraggableColorbar(object):
 
     def connect(self):
         """Connect to all the events we need."""
-        self.cidpress = self.cbar.patch.figure.canvas.mpl_connect(
+        self.cidpress = self.cbar.ax.figure.canvas.mpl_connect(
             'button_press_event', self.on_press)
-        self.cidrelease = self.cbar.patch.figure.canvas.mpl_connect(
+        self.cidrelease = self.cbar.ax.figure.canvas.mpl_connect(
             'button_release_event', self.on_release)
-        self.cidmotion = self.cbar.patch.figure.canvas.mpl_connect(
+        self.cidmotion = self.cbar.ax.figure.canvas.mpl_connect(
             'motion_notify_event', self.on_motion)
-        self.keypress = self.cbar.patch.figure.canvas.mpl_connect(
+        self.keypress = self.cbar.ax.figure.canvas.mpl_connect(
             'key_press_event', self.key_press)
-        self.scroll = self.cbar.patch.figure.canvas.mpl_connect(
+        self.scroll = self.cbar.ax.figure.canvas.mpl_connect(
             'scroll_event', self.on_scroll)
 
     def on_press(self, event):
@@ -1321,10 +1327,12 @@ class DraggableColorbar(object):
         self._update()
 
     def _update(self):
-        self.cbar.set_ticks(None, update_ticks=True)  # use default
+        from matplotlib.ticker import AutoLocator
+        self.cbar.set_ticks(AutoLocator())
+        self.cbar.update_ticks()
         self.cbar.draw_all()
         self.mappable.set_norm(self.cbar.norm)
-        self.cbar.patch.figure.canvas.draw()
+        self.cbar.ax.figure.canvas.draw()
 
 
 class SelectFromCollection(object):
@@ -1385,8 +1393,8 @@ class SelectFromCollection(object):
         self.ec[:, -1] = self.alpha_other
         self.lw = np.full(self.Npts, self.linewidth_other)
 
-        self.lasso = LassoSelector(ax, onselect=self.on_select,
-                                   lineprops=dict(color='red', linewidth=0.5))
+        line_kw = _prop_kw('line', dict(color='red', linewidth=0.5))
+        self.lasso = LassoSelector(ax, onselect=self.on_select, **line_kw)
         self.selection = list()
 
     def on_select(self, verts):
@@ -1585,7 +1593,7 @@ class DraggableLine(object):
         self.line.figure.canvas.mpl_disconnect(self.cidpress)
         self.line.figure.canvas.mpl_disconnect(self.cidrelease)
         self.line.figure.canvas.mpl_disconnect(self.cidmotion)
-        self.line.figure.axes[0].lines.remove(self.line)
+        self.line.remove()
 
 
 def _setup_ax_spines(axes, vlines, xmin, xmax, ymin, ymax, invert_y=False,
@@ -2293,7 +2301,14 @@ def _ndarray_to_fig(img):
     return fig
 
 
-def concatenate_images(images, axis=0, bgcolor='black', centered=True):
+def _save_ndarray_img(fname, img):
+    """Save an image to disk."""
+    from PIL import Image
+    Image.fromarray(img).save(fname)
+
+
+def concatenate_images(images, axis=0, bgcolor='black', centered=True,
+                       n_channels=3):
     """Concatenate a list of images.
 
     Parameters
@@ -2309,6 +2324,8 @@ def concatenate_images(images, axis=0, bgcolor='black', centered=True):
         'black'.
     centered : bool
         If True, the images are centered. Defaults to True.
+    n_channels : int
+        Number of color channels. Can be 3 or 4. The default value is 3.
 
     Returns
     -------
@@ -2317,14 +2334,15 @@ def concatenate_images(images, axis=0, bgcolor='black', centered=True):
     """
     from matplotlib.colors import colorConverter
     if isinstance(bgcolor, str):
-        bgcolor = colorConverter.to_rgb(bgcolor)
+        func_name = 'to_rgb' if n_channels == 3 else 'to_rgba'
+        bgcolor = getattr(colorConverter, func_name)(bgcolor)
     bgcolor = np.asarray(bgcolor) * 255
     funcs = [np.sum, np.max]
     ret_shape = np.asarray([
         funcs[axis]([image.shape[0] for image in images]),
         funcs[1 - axis]([image.shape[1] for image in images]),
     ])
-    ret = np.zeros((ret_shape[0], ret_shape[1], 3), dtype=np.uint8)
+    ret = np.zeros((ret_shape[0], ret_shape[1], n_channels), dtype=np.uint8)
     ret[:, :, :] = bgcolor
     ptr = np.array([0, 0])
     sec = np.array([0 == axis, 1 == axis]).astype(int)
@@ -2335,3 +2353,17 @@ def concatenate_images(images, axis=0, bgcolor='black', centered=True):
         ret[dec[0]:dec[0] + shape[0], dec[1]:dec[1] + shape[1], :] = image
         ptr += shape * sec
     return ret
+
+
+def _generate_default_filename(ext=".png"):
+    now = datetime.now()
+    dt_string = now.strftime("_%Y-%m-%d_%H-%M-%S")
+    return "MNE" + dt_string + ext
+
+
+def _prop_kw(kind, val):
+    # Can be removed in when we depend on matplotlib 3.4.3+
+    # https://github.com/matplotlib/matplotlib/pull/20585
+    from matplotlib.widgets import SpanSelector
+    pre = '' if 'props' in _get_args(SpanSelector) else kind
+    return {pre + 'props': val}

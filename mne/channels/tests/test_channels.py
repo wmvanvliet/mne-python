@@ -1,7 +1,7 @@
 # Author: Daniel G Wakeman <dwakeman@nmr.mgh.harvard.edu>
 #         Denis A. Engemann <denis.engemann@gmail.com>
 #
-# License: BSD (3-clause)
+# License: BSD-3-Clause
 
 import os.path as op
 
@@ -21,7 +21,6 @@ from mne.channels.channels import (_ch_neighbor_adjacency,
 from mne.io import (read_info, read_raw_fif, read_raw_ctf, read_raw_bti,
                     read_raw_eeglab, read_raw_kit, RawArray)
 from mne.io.constants import FIFF
-from mne.utils import _TempDir, run_tests_if_main
 from mne import (pick_types, pick_channels, EpochsArray, EvokedArray,
                  make_ad_hoc_cov, create_info, read_events, Epochs)
 from mne.datasets import testing
@@ -29,7 +28,7 @@ from mne.datasets import testing
 io_dir = op.join(op.dirname(__file__), '..', '..', 'io')
 base_dir = op.join(io_dir, 'tests', 'data')
 raw_fname = op.join(base_dir, 'test_raw.fif')
-eve_fname = op .join(base_dir, 'test-eve.fif')
+eve_fname = op.join(base_dir, 'test-eve.fif')
 fname_kit_157 = op.join(io_dir, 'kit', 'tests', 'data', 'test.sqd')
 
 
@@ -178,9 +177,9 @@ def test_set_channel_types():
     pytest.raises(ValueError, raw.set_channel_types, ch_types)
 
 
-def test_read_ch_adjacency():
+def test_read_ch_adjacency(tmpdir):
     """Test reading channel adjacency templates."""
-    tempdir = _TempDir()
+    tempdir = str(tmpdir)
     a = partial(np.array, dtype='<U7')
     # no pep8
     nbh = np.array([[(['MEG0111'], [[a(['MEG0131'])]]),
@@ -344,6 +343,18 @@ def test_find_ch_adjacency():
     assert ch_names[0] == 'MEG 001'
 
 
+@testing.requires_testing_data
+def test_neuromag122_adjacency():
+    """Test computing the adjacency matrix of Neuromag122-Data."""
+    nm122_fname = op.join(testing.data_path(), 'misc',
+                          'neuromag122_test_file-raw.fif')
+    raw = read_raw_fif(nm122_fname, preload=True)
+    conn, ch_names = find_ch_adjacency(raw.info, 'grad')
+    assert conn.getnnz() == 1564
+    assert len(ch_names) == 122
+    assert conn.shape == (122, 122)
+
+
 def test_drop_channels():
     """Test if dropping channels works with various arguments."""
     raw = read_raw_fif(raw_fname, preload=True).crop(0, 0.1)
@@ -352,6 +363,31 @@ def test_drop_channels():
     raw.drop_channels({"MEG 0132", "MEG 0133"})  # set argument
     pytest.raises(ValueError, raw.drop_channels, ["MEG 0111", 5])
     pytest.raises(ValueError, raw.drop_channels, 5)  # must be list or str
+
+
+def test_add_reference_channels():
+    """Test if there is a new reference channel that consist of all zeros."""
+    raw = read_raw_fif(raw_fname, preload=True)
+    n_raw_original_channels = len(raw.ch_names)
+    epochs = Epochs(raw, read_events(eve_fname))
+    epochs.load_data()
+    epochs_original_shape = epochs._data.shape[1]
+    evoked = epochs.average()
+    n_evoked_original_channels = len(evoked.ch_names)
+
+    # Raw object
+    raw.add_reference_channels(['REF 123'])
+    assert len(raw.ch_names) == n_raw_original_channels + 1
+    assert np.all(raw.get_data()[-1] == 0)
+
+    # Epochs object
+    epochs.add_reference_channels(['REF 123'])
+    assert epochs._data.shape[1] == epochs_original_shape + 1
+
+    # Evoked object
+    evoked.add_reference_channels(['REF 123'])
+    assert len(evoked.ch_names) == n_evoked_original_channels + 1
+    assert np.all(evoked._data[-1] == 0)
 
 
 def test_equalize_channels():
@@ -463,6 +499,3 @@ def test_combine_channels():
         combine_channels(raw, warn2)
         combine_channels(raw_ch_bad, warn3, drop_bad=True)
     assert len(record) == 3
-
-
-run_tests_if_main()

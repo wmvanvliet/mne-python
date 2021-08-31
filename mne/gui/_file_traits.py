@@ -3,7 +3,7 @@
 
 # Authors: Christian Brodbeck <christianbrodbeck@nyu.edu>
 #
-# License: BSD (3-clause)
+# License: BSD-3-Clause
 
 import os
 import os.path as op
@@ -188,7 +188,9 @@ class SurfaceSource(HasTraits):
         """Read the file."""
         if op.exists(self.file):
             if self.file.endswith('.fif'):
-                bem = read_bem_surfaces(self.file, verbose=False)[0]
+                bem = read_bem_surfaces(
+                    self.file, on_defects='warn', verbose=False
+                )[0]
             else:
                 try:
                     bem = read_surface(self.file, return_dict=True)[2]
@@ -262,7 +264,7 @@ class DigSource(HasPrivateTraits):
     """
 
     file = FileOrDir(exists=True,
-                     filter=[';'.join([f'*{ext}' for ext in supported])])
+                     filter=[' '.join([f'*{ext}' for ext in supported])])
 
     inst_fname = Property(Str, depends_on='file')
     inst_dir = Property(depends_on='file')

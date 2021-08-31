@@ -2,7 +2,7 @@
 
 # Author: Teon Brooks <teon.brooks@gmail.com>
 #
-# License: BSD (3-clause)
+# License: BSD-3-Clause
 
 from collections import OrderedDict
 from os import SEEK_CUR, path as op
@@ -148,8 +148,8 @@ def _set_dig_kit(mrk, elp, hsp, eeg):
             raise ValueError("File %r should contain 8 points; got shape "
                              "%s." % (elp, elp_points.shape))
         elp = elp_points
-    elif len(elp) not in (7, 8):
-        raise ValueError("ELP should contain 7 or 8 points; got shape "
+    elif len(elp) not in (6, 7, 8):
+        raise ValueError("ELP should contain 6 ~ 8 points; got shape "
                          "%s." % (elp.shape,))
     if isinstance(mrk, str):
         mrk = read_mrk(mrk)

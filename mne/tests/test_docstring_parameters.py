@@ -9,7 +9,7 @@ from unittest import SkipTest
 import pytest
 
 import mne
-from mne.utils import run_tests_if_main, requires_numpydoc, _pl
+from mne.utils import requires_numpydoc, _pl
 
 public_modules = [
     # the list of modules users need to access for all functionality
@@ -27,6 +27,7 @@ public_modules = [
     'mne.datasets.sample',
     'mne.decoding',
     'mne.dipole',
+    'mne.export',
     'mne.filter',
     'mne.forward',
     'mne.inverse_sparse',
@@ -283,7 +284,7 @@ def test_documented():
         'decoding', 'events', 'file_io', 'forward', 'inverse', 'logging',
         'most_used_classes', 'mri', 'preprocessing', 'reading_raw_data',
         'realtime', 'report', 'sensor_space', 'simulation', 'source_space',
-        'statistics', 'time_frequency', 'visualization')
+        'statistics', 'time_frequency', 'visualization', 'export')
     known_names = list()
     for api_file in api_files:
         with open(op.join(doc_dir, f'{api_file}.rst'), 'rb') as fid:
@@ -318,6 +319,3 @@ def test_documented():
         raise AssertionError('\n\nFound new public members missing from '
                              'doc/python_reference.rst:\n\n* ' +
                              '\n* '.join(sorted(set(missing))))
-
-
-run_tests_if_main()

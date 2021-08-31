@@ -6,8 +6,9 @@
 #          Stefan Appelhoff <stefan.appelhoff@mailbox.org>
 #          Joan Massich <mailsik@gmail.com>
 #
-# License: BSD (3-clause)
+# License: BSD-3-Clause
 
+from contextlib import nullcontext
 from functools import partial
 import os.path as op
 import inspect
@@ -21,7 +22,6 @@ import pytest
 
 from mne import pick_types, Annotations
 from mne.datasets import testing
-from mne.fixes import nullcontext
 from mne.utils import requires_pandas
 from mne.io import read_raw_edf, read_raw_bdf, read_raw_fif, edf, read_raw_gdf
 from mne.io.tests.test_raw import _test_raw_reader
@@ -512,3 +512,16 @@ def test_degenerate():
                  partial(_read_header, exclude=())):
         with pytest.raises(NotImplementedError, match='Only.*txt.*'):
             func(edf_txt_stim_channel_path)
+
+
+def test_exclude():
+    """Test exclude parameter."""
+    exclude = ["I1", "I2", "I3", "I4"]  # list of excluded channels
+
+    raw = read_raw_edf(edf_path, exclude=["I1", "I2", "I3", "I4"])
+    for ch in exclude:
+        assert ch not in raw.ch_names
+
+    raw = read_raw_edf(edf_path, exclude="I[1-4]")
+    for ch in exclude:
+        assert ch not in raw.ch_names

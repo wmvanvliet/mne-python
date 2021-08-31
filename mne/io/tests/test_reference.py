@@ -2,8 +2,9 @@
 #          Alexandre Gramfort <alexandre.gramfort@inria.fr>
 #          Teon Brooks <teon.brooks@gmail.com>
 #
-# License: BSD (3-clause)
+# License: BSD-3-Clause
 
+from contextlib import nullcontext
 import itertools
 import os.path as op
 import numpy as np
@@ -18,13 +19,12 @@ from mne import (pick_channels, pick_types, Epochs, read_events,
                  pick_channels_forward, read_evokeds,
                  find_events)
 from mne.epochs import BaseEpochs
-from mne.fixes import nullcontext
 from mne.io import RawArray, read_raw_fif
 from mne.io.constants import FIFF
 from mne.io.proj import _has_eeg_average_ref_proj, Projection
 from mne.io.reference import _apply_reference
 from mne.datasets import testing
-from mne.utils import run_tests_if_main, catch_logging
+from mne.utils import catch_logging
 
 base_dir = op.join(op.dirname(__file__), 'data')
 raw_fname = op.join(base_dir, 'test_raw.fif')
@@ -238,8 +238,12 @@ def test_set_eeg_reference():
         set_eeg_reference(raw, ['EEG 001'], True, True)
 
 
-@pytest.mark.parametrize('ch_type', ('auto', 'ecog', 'dbs'))
-def test_set_eeg_reference_ch_type(ch_type):
+@pytest.mark.parametrize('ch_type, msg',
+                         [('auto', ('ECoG',)),
+                          ('ecog', ('ECoG',)),
+                          ('dbs', ('DBS',)),
+                          (['ecog', 'dbs'], ('ECoG', 'DBS'))])
+def test_set_eeg_reference_ch_type(ch_type, msg):
     """Test setting EEG reference for ECoG or DBS."""
     # gh-6454
     # gh-8739 added DBS
@@ -249,17 +253,13 @@ def test_set_eeg_reference_ch_type(ch_type):
     raw = RawArray(data, create_info(ch_names, 1000., ['ecog'] * 2
                                      + ['dbs'] * 2 + ['misc']))
     if ch_type == 'auto':
-
         ref_ch = ch_names[:2]
     else:
         ref_ch = raw.copy().pick(picks=ch_type).ch_names
     with catch_logging() as log:
         reref, ref_data = set_eeg_reference(raw.copy(), ch_type=ch_type,
                                             verbose=True)
-    if ch_type in ['auto', 'ecog']:
-        assert 'Applying a custom ECoG' in log.getvalue()
-    else:
-        assert 'Applying a custom DBS' in log.getvalue()
+    assert f"Applying a custom {msg}" in log.getvalue()
     assert reref.info['custom_ref_applied']  # gh-7350
     _test_reference(raw, reref, ref_data, ref_ch)
     with pytest.raises(ValueError, match='No channels supplied'):
@@ -369,16 +369,14 @@ def test_set_bipolar_reference(inst_type):
 
     # Check channel information
     bp_info = reref.info['chs'][reref.ch_names.index('bipolar')]
-    an_info = reref.info['chs'][inst.ch_names.index('EEG 001')]
+    an_info = inst.info['chs'][inst.ch_names.index('EEG 001')]
     for key in bp_info:
-        if key == 'loc':
-            assert_array_equal(bp_info[key], 0)
-        elif key == 'coil_type':
-            assert_equal(bp_info[key], FIFF.FIFFV_COIL_EEG_BIPOLAR)
+        if key == 'coil_type':
+            assert bp_info[key] == FIFF.FIFFV_COIL_EEG_BIPOLAR, key
         elif key == 'kind':
-            assert_equal(bp_info[key], FIFF.FIFFV_EOG_CH)
-        else:
-            assert_equal(bp_info[key], an_info[key])
+            assert bp_info[key] == FIFF.FIFFV_EOG_CH, key
+        elif key != 'ch_name':
+            assert_equal(bp_info[key], an_info[key], err_msg=key)
 
     # Minimalist call
     reref = set_bipolar_reference(inst, 'EEG 001', 'EEG 002')
@@ -663,15 +661,11 @@ def test_bipolar_combinations():
     # check if reference channels have been kept correctly.
     assert (len(raw_test.ch_names) == len(a_channels) + len(ch_names))
     for idx, ch_label in enumerate(ch_names):
-        manual_ch = raw_data[idx, :]
-        assert_array_equal(
-            raw_test._data[raw_test.ch_names.index(ch_label), :], manual_ch)
+        manual_ch = raw_data[np.newaxis, idx]
+        assert_array_equal(raw_test.get_data(ch_label), manual_ch)
 
     # test bipolars with a channel in both list (anode & cathode).
     raw_test = set_bipolar_reference(
         raw, ['CH2', 'CH1'], ['CH1', 'CH2'], copy=True)
     _check_bipolar(raw_test, 'CH2', 'CH1')
     _check_bipolar(raw_test, 'CH1', 'CH2')
-
-
-run_tests_if_main()

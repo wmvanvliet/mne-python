@@ -7,7 +7,7 @@ RawKIT class is adapted from Denis Engemann et al.'s mne_bti2fiff.py.
 #          Joan Massich <mailsik@gmail.com>
 #          Christian Brodbeck <christianbrodbeck@nyu.edu>
 #
-# License: BSD (3-clause)
+# License: BSD-3-Clause
 
 from collections import defaultdict, OrderedDict
 from math import sin, cos
@@ -176,6 +176,7 @@ class RawKIT(BaseRaw):
 
         return stim_ch
 
+    @fill_doc
     def _set_stimchannels(self, info, stim, stim_code):
         """Specify how the trigger channel is synthesized from analog channels.
 
@@ -185,8 +186,7 @@ class RawKIT(BaseRaw):
 
         Parameters
         ----------
-        info : instance of MeasInfo
-            The measurement info.
+        %(info_not_none)s
         stim : list of int | '<' | '>'
             Can be submitted as list of trigger channels.
             If a list is not specified, the default triggers extracted from
@@ -488,8 +488,7 @@ def get_kit_info(rawfile, allow_unknown_format, standardize_names=None,
 
     Returns
     -------
-    info : instance of Info
-        An Info for the instance.
+    %(info_not_none)s
     sqd : dict
         A dict containing all the sqd parameter settings.
     """
@@ -512,7 +511,7 @@ def get_kit_info(rawfile, allow_unknown_format, standardize_names=None,
             version_string = "V%iR%03i" % (version, revision)
             if allow_unknown_format:
                 unsupported_format = True
-                logger.warning("Force loading KIT format %s", version_string)
+                warn("Force loading KIT format %s", version_string)
             else:
                 raise UnsupportedKITFormat(
                     version_string,
@@ -720,17 +719,21 @@ def get_kit_info(rawfile, allow_unknown_format, standardize_names=None,
                     hsp.append(rr)
 
             # nasion, lpa, rpa, HPI in native space
-            elp = [dig.pop(key) for key in (
-                'fidnz', 'fidt9', 'fidt10',
-                'hpi_1', 'hpi_2', 'hpi_3', 'hpi_4')]
-            if 'hpi_5' in dig and dig['hpi_5'].any():
-                elp.append(dig.pop('hpi_5'))
+            elp = []
+            for key in (
+                    'fidnz', 'fidt9', 'fidt10',
+                    'hpi_1', 'hpi_2', 'hpi_3', 'hpi_4', 'hpi_5'):
+                if key in dig and np.isfinite(dig[key]).all():
+                    elp.append(dig.pop(key))
             elp = np.array(elp)
             hsp = np.array(hsp, float).reshape(-1, 3)
-            assert elp.shape in ((7, 3), (8, 3))
+            if elp.shape not in ((6, 3), (7, 3), (8, 3)):
+                raise RuntimeError(
+                    f'Fewer than 3 HPI coils found, got {len(elp) - 3}')
             # coregistration
             fid.seek(cor_dir['offset'])
             mrk = np.zeros((elp.shape[0] - 3, 3))
+            meg_done = [True] * 5
             for _ in range(cor_dir['count']):
                 done = np.fromfile(fid, INT32, 1)[0]
                 fid.seek(16 * KIT.DOUBLE +  # meg_to_mri
@@ -741,12 +744,17 @@ def get_kit_info(rawfile, allow_unknown_format, standardize_names=None,
                     continue
                 assert marker_count >= len(mrk)
                 for mi in range(len(mrk)):
-                    mri_type, meg_type, mri_done, meg_done = \
+                    mri_type, meg_type, mri_done, this_meg_done = \
                         np.fromfile(fid, INT32, 4)
-                    assert meg_done
+                    meg_done[mi] = bool(this_meg_done)
                     fid.seek(3 * KIT.DOUBLE, SEEK_CUR)  # mri_pos
                     mrk[mi] = np.fromfile(fid, FLOAT64, 3)
                 fid.seek(256, SEEK_CUR)  # marker_file (char)
+            if not all(meg_done):
+                logger.info(f'Keeping {sum(meg_done)}/{len(meg_done)} HPI '
+                            'coils that were digitized')
+                elp = elp[[True] * 3 + meg_done]
+                mrk = mrk[meg_done]
             sqd.update(hsp=hsp, elp=elp, mrk=mrk)
 
     # precompute conversion factor for reading data
