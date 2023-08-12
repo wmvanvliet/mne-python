@@ -1,20 +1,39 @@
 # Authors: Adonay Nunes <adonay.s.nunes@gmail.com>
 #          Luke Bloy <luke.bloy@gmail.com>
-# License: BSD (3-clause)
+# License: BSD-3-Clause
 
 
 import numpy as np
-from ..annotations import (Annotations, _annotations_starts_stops)
-from ..transforms import (quat_to_rot, _average_quats, _angle_between_quats,
-                          apply_trans, _quat_to_affine)
+
+from ..io.base import BaseRaw
+from ..annotations import (
+    Annotations,
+    _annotations_starts_stops,
+    annotations_from_events,
+    _adjust_onset_meas_date,
+)
+from ..transforms import (
+    quat_to_rot,
+    _average_quats,
+    _angle_between_quats,
+    apply_trans,
+    _quat_to_affine,
+)
 from ..filter import filter_data
 from .. import Transform
-from ..utils import (_mask_to_onsets_offsets, logger, verbose)
+from ..utils import _mask_to_onsets_offsets, logger, verbose, _validate_type, _pl
 
 
 @verbose
-def annotate_muscle_zscore(raw, threshold=4, ch_type=None, min_length_good=0.1,
-                           filter_freq=(110, 140), n_jobs=1, verbose=None):
+def annotate_muscle_zscore(
+    raw,
+    threshold=4,
+    ch_type=None,
+    min_length_good=0.1,
+    filter_freq=(110, 140),
+    n_jobs=None,
+    verbose=None,
+):
     """Create annotations for segments that likely contain muscle artifacts.
 
     Detects data segments containing activity in the frequency range given by
@@ -60,37 +79,43 @@ def annotate_muscle_zscore(raw, threshold=4, ch_type=None, min_length_good=0.1,
     .. footbibliography::
     """
     from scipy.stats import zscore
-    from scipy.ndimage.measurements import label
+    from scipy.ndimage import label
 
     raw_copy = raw.copy()
 
     if ch_type is None:
         raw_ch_type = raw_copy.get_channel_types()
-        if 'mag' in raw_ch_type:
-            ch_type = 'mag'
-        elif 'grad' in raw_ch_type:
-            ch_type = 'grad'
-        elif 'eeg' in raw_ch_type:
-            ch_type = 'eeg'
+        if "mag" in raw_ch_type:
+            ch_type = "mag"
+        elif "grad" in raw_ch_type:
+            ch_type = "grad"
+        elif "eeg" in raw_ch_type:
+            ch_type = "eeg"
         else:
-            raise ValueError('No M/EEG channel types found, please specify a'
-                             ' ch_type or provide M/EEG sensor data')
-        logger.info('Using %s sensors for muscle artifact detection'
-                    % (ch_type))
+            raise ValueError(
+                "No M/EEG channel types found, please specify a"
+                " ch_type or provide M/EEG sensor data"
+            )
+        logger.info("Using %s sensors for muscle artifact detection" % (ch_type))
 
-    if ch_type in ('mag', 'grad'):
+    if ch_type in ("mag", "grad"):
         raw_copy.pick_types(meg=ch_type, ref_meg=False)
     else:
-        ch_type = {'meg': False, ch_type: True}
+        ch_type = {"meg": False, ch_type: True}
         raw_copy.pick_types(**ch_type)
 
-    raw_copy.filter(filter_freq[0], filter_freq[1], fir_design='firwin',
-                    pad="reflect_limited", n_jobs=n_jobs)
+    raw_copy.filter(
+        filter_freq[0],
+        filter_freq[1],
+        fir_design="firwin",
+        pad="reflect_limited",
+        n_jobs=n_jobs,
+    )
     raw_copy.apply_hilbert(envelope=True, n_jobs=n_jobs)
 
     data = raw_copy.get_data(reject_by_annotation="NaN")
     nan_mask = ~np.isnan(data[0])
-    sfreq = raw_copy.info['sfreq']
+    sfreq = raw_copy.info["sfreq"]
 
     art_scores = zscore(data[:, nan_mask], axis=1)
     art_scores = art_scores.sum(axis=0) / np.sqrt(art_scores.shape[0])
@@ -112,14 +137,21 @@ def annotate_muscle_zscore(raw, threshold=4, ch_type=None, min_length_good=0.1,
         if len(l_idx) < min_samps:
             art_mask[l_idx] = True
 
-    annot = _annotations_from_mask(raw_copy.times, art_mask, 'BAD_muscle')
-
+    annot = _annotations_from_mask(
+        raw_copy.times, art_mask, "BAD_muscle", orig_time=raw.info["meas_date"]
+    )
+    _adjust_onset_meas_date(annot, raw)
     return annot, scores_muscle
 
 
-def annotate_movement(raw, pos, rotation_velocity_limit=None,
-                      translation_velocity_limit=None,
-                      mean_distance_limit=None, use_dev_head_trans='average'):
+def annotate_movement(
+    raw,
+    pos,
+    rotation_velocity_limit=None,
+    translation_velocity_limit=None,
+    mean_distance_limit=None,
+    use_dev_head_trans="average",
+):
     """Detect segments with movement.
 
     Detects segments periods further from rotation_velocity_limit,
@@ -134,9 +166,9 @@ def annotate_movement(raw, pos, rotation_velocity_limit=None,
         The position and quaternion parameters from cHPI fitting. Obtained
         with `mne.chpi` functions.
     rotation_velocity_limit : float
-        Head rotation velocity limit in radians per second.
+        Head rotation velocity limit in degrees per second.
     translation_velocity_limit : float
-        Head translation velocity limit in radians per second.
+        Head translation velocity limit in meters per second.
     mean_distance_limit : float
         Head position limit from mean recording in meters.
     use_dev_head_trans : 'average' (default) | 'info'
@@ -157,45 +189,50 @@ def annotate_movement(raw, pos, rotation_velocity_limit=None,
     --------
     compute_average_dev_head_t
     """
-    sfreq = raw.info['sfreq']
-    hp_ts = pos[:, 0].copy()
-    hp_ts -= raw.first_samp / sfreq
+    sfreq = raw.info["sfreq"]
+    hp_ts = pos[:, 0].copy() - raw.first_time
     dt = np.diff(hp_ts)
-    hp_ts = np.concatenate([hp_ts, [hp_ts[-1] + 1. / sfreq]])
-
-    annot = Annotations([], [], [], orig_time=None)  # rel to data start
+    hp_ts = np.concatenate([hp_ts, [hp_ts[-1] + 1.0 / sfreq]])
+    orig_time = raw.info["meas_date"]
+    annot = Annotations([], [], [], orig_time=orig_time)
 
     # Annotate based on rotational velocity
     t_tot = raw.times[-1]
     if rotation_velocity_limit is not None:
         assert rotation_velocity_limit > 0
-        # Rotational velocity (radians / sec)
+        # Rotational velocity (radians / s)
         r = _angle_between_quats(pos[:-1, 1:4], pos[1:, 1:4])
         r /= dt
-        bad_mask = (r >= np.deg2rad(rotation_velocity_limit))
+        bad_mask = r >= np.deg2rad(rotation_velocity_limit)
         onsets, offsets = _mask_to_onsets_offsets(bad_mask)
         onsets, offsets = hp_ts[onsets], hp_ts[offsets]
         bad_pct = 100 * (offsets - onsets).sum() / t_tot
-        logger.info(u'Omitting %5.1f%% (%3d segments): '
-                    u'ω >= %5.1f°/s (max: %0.1f°/s)'
-                    % (bad_pct, len(onsets), rotation_velocity_limit,
-                       np.rad2deg(r.max())))
-        annot += _annotations_from_mask(hp_ts, bad_mask, 'BAD_mov_rotat_vel')
+        logger.info(
+            "Omitting %5.1f%% (%3d segments): "
+            "ω >= %5.1f°/s (max: %0.1f°/s)"
+            % (bad_pct, len(onsets), rotation_velocity_limit, np.rad2deg(r.max()))
+        )
+        annot += _annotations_from_mask(
+            hp_ts, bad_mask, "BAD_mov_rotat_vel", orig_time=orig_time
+        )
 
     # Annotate based on translational velocity limit
     if translation_velocity_limit is not None:
         assert translation_velocity_limit > 0
         v = np.linalg.norm(np.diff(pos[:, 4:7], axis=0), axis=-1)
         v /= dt
-        bad_mask = (v >= translation_velocity_limit)
+        bad_mask = v >= translation_velocity_limit
         onsets, offsets = _mask_to_onsets_offsets(bad_mask)
         onsets, offsets = hp_ts[onsets], hp_ts[offsets]
         bad_pct = 100 * (offsets - onsets).sum() / t_tot
-        logger.info(u'Omitting %5.1f%% (%3d segments): '
-                    u'v >= %5.4fm/s (max: %5.4fm/s)'
-                    % (bad_pct, len(onsets), translation_velocity_limit,
-                       v.max()))
-        annot += _annotations_from_mask(hp_ts, bad_mask, 'BAD_mov_trans_vel')
+        logger.info(
+            "Omitting %5.1f%% (%3d segments): "
+            "v >= %5.4fm/s (max: %5.4fm/s)"
+            % (bad_pct, len(onsets), translation_velocity_limit, v.max())
+        )
+        annot += _annotations_from_mask(
+            hp_ts, bad_mask, "BAD_mov_trans_vel", orig_time=orig_time
+        )
 
     # Annotate based on displacement from mean head position
     disp = []
@@ -204,24 +241,28 @@ def annotate_movement(raw, pos, rotation_velocity_limit=None,
 
         # compute dev to head transform for fixed points
         use_dev_head_trans = use_dev_head_trans.lower()
-        if use_dev_head_trans not in ['average', 'info']:
-            raise ValueError('use_dev_head_trans must be either' +
-                             ' \'average\' or \'info\': got \'%s\''
-                             % (use_dev_head_trans,))
+        if use_dev_head_trans not in ["average", "info"]:
+            raise ValueError(
+                "use_dev_head_trans must be either"
+                + " 'average' or 'info': got '%s'" % (use_dev_head_trans,)
+            )
 
-        if use_dev_head_trans == 'average':
+        if use_dev_head_trans == "average":
             fixed_dev_head_t = compute_average_dev_head_t(raw, pos)
-        elif use_dev_head_trans == 'info':
-            fixed_dev_head_t = raw.info['dev_head_t']
+        elif use_dev_head_trans == "info":
+            fixed_dev_head_t = raw.info["dev_head_t"]
 
         # Get static head pos from file, used to convert quat to cartesian
-        chpi_pos = sorted([d for d in raw.info['hpi_results'][-1]
-                          ['dig_points']], key=lambda x: x['ident'])
-        chpi_pos = np.array([d['r'] for d in chpi_pos])
+        chpi_pos = sorted(
+            [d for d in raw.info["hpi_results"][-1]["dig_points"]],
+            key=lambda x: x["ident"],
+        )
+        chpi_pos = np.array([d["r"] for d in chpi_pos])
 
         # Get head pos changes during recording
-        chpi_pos_mov = np.array([apply_trans(_quat_to_affine(quat), chpi_pos)
-                                for quat in pos[:, 1:7]])
+        chpi_pos_mov = np.array(
+            [apply_trans(_quat_to_affine(quat), chpi_pos) for quat in pos[:, 1:7]]
+        )
 
         # get fixed position
         chpi_pos_fix = apply_trans(fixed_dev_head_t, chpi_pos)
@@ -230,15 +271,20 @@ def annotate_movement(raw, pos, rotation_velocity_limit=None,
         hpi_disp = chpi_pos_mov - np.tile(chpi_pos_fix, (pos.shape[0], 1, 1))
 
         # get positions above threshold distance
-        disp = np.sqrt((hpi_disp ** 2).sum(axis=2))
+        disp = np.sqrt((hpi_disp**2).sum(axis=2))
         bad_mask = np.any(disp > mean_distance_limit, axis=1)
         onsets, offsets = _mask_to_onsets_offsets(bad_mask)
         onsets, offsets = hp_ts[onsets], hp_ts[offsets]
         bad_pct = 100 * (offsets - onsets).sum() / t_tot
-        logger.info(u'Omitting %5.1f%% (%3d segments): '
-                    u'disp >= %5.4fm (max: %5.4fm)'
-                    % (bad_pct, len(onsets), mean_distance_limit, disp.max()))
-        annot += _annotations_from_mask(hp_ts, bad_mask, 'BAD_mov_dist')
+        logger.info(
+            "Omitting %5.1f%% (%3d segments): "
+            "disp >= %5.4fm (max: %5.4fm)"
+            % (bad_pct, len(onsets), mean_distance_limit, disp.max())
+        )
+        annot += _annotations_from_mask(
+            hp_ts, bad_mask, "BAD_mov_dist", orig_time=orig_time
+        )
+    _adjust_onset_meas_date(annot, raw)
     return annot, disp
 
 
@@ -257,10 +303,10 @@ def compute_average_dev_head_t(raw, pos):
 
     Returns
     -------
-    dev_head_t : array
+    dev_head_t : array of shape (4, 4)
         New trans matrix using the averaged good head positions.
     """
-    sfreq = raw.info['sfreq']
+    sfreq = raw.info["sfreq"]
     seg_good = np.ones(len(raw.times))
     trans_pos = np.zeros(3)
     hp = pos.copy()
@@ -269,14 +315,15 @@ def compute_average_dev_head_t(raw, pos):
     # Check rounding issues at 0 time
     if hp_ts[0] < 0:
         hp_ts[0] = 0
-        assert hp_ts[1] > 1. / sfreq
+        assert hp_ts[1] > 1.0 / sfreq
 
     # Mask out segments if beyond scan time
     mask = hp_ts <= raw.times[-1]
     if not mask.all():
         logger.info(
-            '          Removing %d samples > raw.times[-1] (%s)'
-            % (np.sum(~mask), raw.times[-1]))
+            "          Removing %d samples > raw.times[-1] (%s)"
+            % (np.sum(~mask), raw.times[-1])
+        )
         hp = hp[mask]
     del mask, hp_ts
 
@@ -294,7 +341,7 @@ def compute_average_dev_head_t(raw, pos):
     assert (np.diff(idx) > 0).all()
 
     # Mark times bad that are bad according to annotations
-    onsets, ends = _annotations_starts_stops(raw, 'bad')
+    onsets, ends = _annotations_starts_stops(raw, "bad")
     for onset, end in zip(onsets, ends):
         seg_good[onset:end] = 0
     dt = np.diff(np.cumsum(np.concatenate([[0], seg_good]))[idx])
@@ -312,24 +359,261 @@ def compute_average_dev_head_t(raw, pos):
     trans[:3, :3] = quat_to_rot(best_q)
     trans[:3, 3] = trans_pos / dt.sum()
     assert np.linalg.norm(trans[:3, 3]) < 1  # less than 1 meter is sane
-    dev_head_t = Transform('meg', 'head', trans)
+    dev_head_t = Transform("meg", "head", trans)
     return dev_head_t
 
 
-def _annotations_from_mask(times, art_mask, art_name):
+def _annotations_from_mask(times, mask, annot_name, orig_time=None):
     """Construct annotations from boolean mask of the data."""
-    from scipy.ndimage.measurements import label
-    comps, num_comps = label(art_mask)
-    onsets, durations, desc = [], [], []
-    n_times = len(times)
-    for lbl in range(1, num_comps + 1):
-        l_idx = np.nonzero(comps == lbl)[0]
-        onsets.append(times[l_idx[0]])
-        # duration is to the time after the last labeled time
-        # or to the end of the times.
-        if 1 + l_idx[-1] < n_times:
-            durations.append(times[1 + l_idx[-1]] - times[l_idx[0]])
+    from scipy.ndimage import distance_transform_edt
+    from scipy.signal import find_peaks
+
+    mask_tf = distance_transform_edt(mask)
+    # Overcome the shortcoming of find_peaks
+    # in finding a marginal peak, by
+    # inserting 0s at the front and the
+    # rear, then subtracting in index
+    ins_mask_tf = np.concatenate((np.zeros(1), mask_tf, np.zeros(1)))
+    left_midpt_index = find_peaks(ins_mask_tf)[0] - 1
+    right_midpt_index = (
+        np.flip(len(ins_mask_tf) - 1 - find_peaks(ins_mask_tf[::-1])[0]) - 1
+    )
+    onsets_index = left_midpt_index - mask_tf[left_midpt_index].astype(int) + 1
+    ends_index = right_midpt_index + mask_tf[right_midpt_index].astype(int)
+    # Ensure onsets_index >= 0,
+    # otherwise the duration starts from the beginning
+    onsets_index[onsets_index < 0] = 0
+    # Ensure ends_index < len(times),
+    # otherwise the duration is to the end of times
+    if len(times) == len(mask):
+        ends_index[ends_index >= len(times)] = len(times) - 1
+    # To be consistent with the original code,
+    # possibly a bug in tests code
+    else:
+        ends_index[ends_index >= len(mask)] = len(mask)
+    onsets = times[onsets_index]
+    ends = times[ends_index]
+    durations = ends - onsets
+    desc = [annot_name] * len(durations)
+    return Annotations(onsets, durations, desc, orig_time=orig_time)
+
+
+@verbose
+def annotate_break(
+    raw,
+    events=None,
+    min_break_duration=15.0,
+    t_start_after_previous=5.0,
+    t_stop_before_next=5.0,
+    ignore=("bad", "edge"),
+    *,
+    verbose=None,
+):
+    """Create `~mne.Annotations` for breaks in an ongoing recording.
+
+    This function first searches for segments in the data that are not
+    annotated or do not contain any events and are at least
+    ``min_break_duration`` seconds long, and then proceeds to creating
+    annotations for those break periods.
+
+    Parameters
+    ----------
+    raw : instance of Raw
+        The continuous data to analyze.
+    events : None | array, shape (n_events, 3)
+        If ``None`` (default), operate based solely on the annotations present
+        in ``raw``. If an events array, ignore any annotations in the raw data,
+        and operate based on these events only.
+    min_break_duration : float
+        The minimum time span in seconds between the offset of one and the
+        onset of the subsequent annotation (if ``events`` is ``None``) or
+        between two consecutive events (if ``events`` is an array) to consider
+        this period a "break". Defaults to 15 seconds.
+
+        .. note:: This value defines the minimum duration of a break period in
+                  the data, **not** the minimum duration of the generated
+                  annotations! See also ``t_start_after_previous`` and
+                  ``t_stop_before_next`` for details.
+
+    t_start_after_previous, t_stop_before_next : float
+        Specifies how far the to-be-created "break" annotation extends towards
+        the two annotations or events spanning the break. This can be used to
+        ensure e.g. that the break annotation doesn't start and end immediately
+        with a stimulation event. If, for example, your data contains a break
+        of 30 seconds between two stimuli, and ``t_start_after_previous`` is
+        set to ``5`` and ``t_stop_before_next`` is set to ``3``, the break
+        annotation will start 5 seconds after the first stimulus, and end 3
+        seconds before the second stimulus, yielding an annotated break of
+        ``30 - 5 - 3 = 22`` seconds. Both default to 5 seconds.
+
+        .. note:: The beginning and the end of the recording will be annotated
+                  as breaks, too, if the period from recording start until the
+                  first annotation or event (or from last annotation or event
+                  until recording end) is at least ``min_break_duration``
+                  seconds long.
+
+    ignore : iterable of str
+        Annotation descriptions starting with these strings will be ignored by
+        the break-finding algorithm. The string comparison is case-insensitive,
+        i.e., ``('bad',)`` and ``('BAD',)`` are equivalent. By default, all
+        annotation descriptions starting with "bad" and annotations
+        indicating "edges" (produced by data concatenation) will be
+        ignored. Pass an empty list or tuple to take all existing annotations
+        into account. If ``events`` is passed, this parameter has no effect.
+    %(verbose)s
+
+    Returns
+    -------
+    break_annotations : instance of Annotations
+        The break annotations, each with the description ``'BAD_break'``. If
+        no breaks could be found given the provided function parameters, an
+        empty `~mne.Annotations` object will be returned.
+
+    Notes
+    -----
+    .. versionadded:: 0.24
+    """
+    _validate_type(item=raw, item_name="raw", types=BaseRaw, type_name="Raw")
+    _validate_type(item=events, item_name="events", types=(None, np.ndarray))
+
+    if min_break_duration - t_start_after_previous - t_stop_before_next <= 0:
+        annot_dur = min_break_duration - t_start_after_previous - t_stop_before_next
+        raise ValueError(
+            f"The result of "
+            f"min_break_duration - t_start_after_previous - "
+            f"t_stop_before_next must be greater than 0, but it is: "
+            f"{annot_dur}"
+        )
+
+    if events is not None and events.size == 0:
+        raise ValueError("The events array must not be empty.")
+
+    if events is not None or not ignore:
+        ignore = tuple()
+    else:
+        ignore = tuple(ignore)
+
+    for item in ignore:
+        _validate_type(item=item, types="str", item_name='All elements of "ignore"')
+
+    if events is None:
+        annotations = raw.annotations.copy()
+        if ignore:
+            logger.info(
+                f"Ignoring annotations with descriptions starting "
+                f'with: {", ".join(ignore)}'
+            )
+    else:
+        annotations = annotations_from_events(
+            events=events, sfreq=raw.info["sfreq"], orig_time=raw.info["meas_date"]
+        )
+
+    if not annotations:
+        raise ValueError(
+            "Could not find (or generate) any annotations in " "your data."
+        )
+
+    # Only keep annotations of interest and extract annotated time periods
+    # Ignore case
+    ignore = tuple(i.lower() for i in ignore)
+    keep_mask = [True] * len(annotations)
+    for idx, description in enumerate(annotations.description):
+        description = description.lower()
+        if any(description.startswith(i) for i in ignore):
+            keep_mask[idx] = False
+
+    annotated_intervals = [
+        [onset, onset + duration]
+        for onset, duration in zip(
+            annotations.onset[keep_mask], annotations.duration[keep_mask]
+        )
+    ]
+
+    # Merge overlapping annotation intervals
+    # Pre-load `merged_intervals` with the first interval to simplify
+    # processing
+    merged_intervals = [annotated_intervals[0]]
+    for interval in annotated_intervals:
+        merged_interval_stop = merged_intervals[-1][1]
+        interval_start, interval_stop = interval
+
+        if interval_stop < merged_interval_stop:
+            # Current interval ends sooner than the merged one; skip it
+            continue
+        elif (
+            interval_start <= merged_interval_stop
+            and interval_stop >= merged_interval_stop
+        ):
+            # Expand duration of the merged interval
+            merged_intervals[-1][1] = interval_stop
         else:
-            durations.append(times[l_idx[-1]] - times[l_idx[0]])
-        desc.append(art_name)
-    return Annotations(onsets, durations, desc)
+            # No overlap between the current interval and the existing merged
+            # time period; proceed to the next interval
+            merged_intervals.append(interval)
+
+    merged_intervals = np.array(merged_intervals)
+    merged_intervals -= raw.first_time  # work in zero-based time
+
+    # Now extract the actual break periods
+    break_onsets = []
+    break_durations = []
+
+    # Handle the time period up until the first annotation
+    if 0 < merged_intervals[0][0] and merged_intervals[0][0] >= min_break_duration:
+        onset = 0  # don't add t_start_after_previous here
+        offset = merged_intervals[0][0] - t_stop_before_next
+        duration = offset - onset
+        break_onsets.append(onset)
+        break_durations.append(duration)
+
+    # Handle the time period between first and last annotation
+    for idx, _ in enumerate(merged_intervals[1:, :], start=1):
+        this_start = merged_intervals[idx, 0]
+        previous_stop = merged_intervals[idx - 1, 1]
+        if this_start - previous_stop < min_break_duration:
+            continue
+
+        onset = previous_stop + t_start_after_previous
+        offset = this_start - t_stop_before_next
+        duration = offset - onset
+        break_onsets.append(onset)
+        break_durations.append(duration)
+
+    # Handle the time period after the last annotation
+    if (
+        raw.times[-1] > merged_intervals[-1][1]
+        and raw.times[-1] - merged_intervals[-1][1] >= min_break_duration
+    ):
+        onset = merged_intervals[-1][1] + t_start_after_previous
+        offset = raw.times[-1]  # don't subtract t_stop_before_next here
+        duration = offset - onset
+        break_onsets.append(onset)
+        break_durations.append(duration)
+
+    # Finally, create the break annotations
+    break_annotations = Annotations(
+        onset=break_onsets,
+        duration=break_durations,
+        description=["BAD_break"],
+        orig_time=raw.info["meas_date"],
+    )
+
+    # Log some info
+    n_breaks = len(break_annotations)
+    break_times = [
+        f"{o:.1f} – {o+d:.1f} s [{d:.1f} s]"
+        for o, d in zip(break_annotations.onset, break_annotations.duration)
+    ]
+    break_times = "\n    ".join(break_times)
+    total_break_dur = sum(break_annotations.duration)
+    fraction_breaks = total_break_dur / raw.times[-1]
+    logger.info(
+        f"\nDetected {n_breaks} break period{_pl(n_breaks)} of >= "
+        f"{min_break_duration} s duration:\n    {break_times}\n"
+        f"In total, {round(100 * fraction_breaks, 1):.1f}% of the "
+        f"data ({round(total_break_dur, 1):.1f} s) have been marked "
+        f"as a break.\n"
+    )
+    _adjust_onset_meas_date(break_annotations, raw)
+
+    return break_annotations

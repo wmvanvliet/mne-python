@@ -6,9 +6,6 @@
 Frequently Asked Questions (FAQ)
 ================================
 
-.. contents:: Page contents
-   :local:
-
 .. highlight:: python
 
 General MNE-Python issues
@@ -18,8 +15,7 @@ General MNE-Python issues
 Help! I can't get Python and MNE-Python working!
 ------------------------------------------------
 
-Check out our section on how to get Anaconda up and running over at the
-:ref:`getting started page <install_python_and_mne_python>`.
+Check out our :ref:`installation instructions <installers>`.
 
 
 I still can't get it to work!
@@ -28,16 +24,15 @@ I still can't get it to work!
 See :ref:`help`.
 
 
-I can't get Mayavi/3D plotting to work under Windows
-----------------------------------------------------
+I can't get PyVista/3D plotting to work under Windows
+-----------------------------------------------------
 
-If Mayavi plotting in Jupyter Notebooks doesn't work well, using the IPython
-magic ``%gui qt`` after importing MNE/Mayavi/PySurfer should `help
+If PyVista plotting in Jupyter Notebooks doesn't work well, using the IPython
+magic ``%gui qt`` should `help
 <https://github.com/ipython/ipython/issues/10384>`_.
 
 .. code-block:: ipython
 
-   from mayavi import mlab
    %gui qt
 
 Python runs on macOS extremely slow even on simple commands!
@@ -140,8 +135,7 @@ data that you want to save but can't figure out how, post to the `MNE Forum`_
 or to the `GitHub issues page`_.
 
 If you want to write your own data to disk (e.g., subject behavioral scores),
-we strongly recommend using `h5io <https://github.com/h5io/h5io>`_, which is
-based on the `HDF5 format
+we strongly recommend using h5io_, which is based on the `HDF5 format
 <https://en.wikipedia.org/wiki/Hierarchical_Data_Format>`_ and h5py_, to save
 data in a fast, future-compatible, standard format.
 
@@ -180,7 +174,7 @@ have an ``n_jobs`` flag but may still use multiple cores. This is because
 support multithreading:
 
 - `OpenBLAS <http://www.openblas.net/>`_
-- `Intel Math Kernel Library (MKL) <https://software.intel.com/en-us/mkl>`_,
+- `Intel Math Kernel Library (MKL) <https://www.intel.com/content/www/us/en/developer/tools/oneapi/onemkl.html>`_,
   which uses `OpenMP <https://www.openmp.org/>`_
 
 To control how many cores are used for linear-algebra-heavy functions like
@@ -308,7 +302,7 @@ does not contain a systematic signal (time-locked to the event of interest),
 the whitened baseline signal should be follow a multivariate Gaussian
 distribution, i.e., whitened baseline signals should be between -1.96 and 1.96
 at a given time sample. Based on the same reasoning, the expected value for the
-:term:`Global Field Power (GFP) <GFP>` is 1 (calculation of the :term:`GFP`
+:term:`global field power` (GFP) is 1 (calculation of the :term:`GFP`
 should take into account the true degrees of freedom, e.g. ``ddof=3`` with 2
 active SSP vectors)::
 
@@ -340,7 +334,7 @@ compared::
     >>> evoked.plot_white(covs) # doctest: +SKIP
 
 This will plot the whitened evoked for the optimal estimator and display the
-:term:`GFPs <GFP>` for all estimators as separate lines in the related panel.
+:term:`GFP` for all estimators as separate lines in the related panel.
 
 
 .. _faq_watershed_bem_meshes:
@@ -376,8 +370,7 @@ order of difficulty):
    :ref:`mne watershed_bem`.
 2. Changing the ``--atlas`` and ``--gcaatlas`` options of
    :ref:`mne watershed_bem`.
-3. Manually editing the meshes (see :ref:`this tutorial
-   <sphx_glr_auto_tutorials_source-modeling_plot_fix_bem_in_blender.py>`).
+3. Manually editing the meshes (see :ref:`this tutorial <tut-fix-meshes>`).
 4. Manually running mri_watershed_ with various FreeSurfer flags (e.g.,
    ``-less`` to fix the output).
 5. Going farther back in your Freesurfer pipeline to fix the problem.
@@ -421,7 +414,7 @@ References
 
 .. _`the most current version`: https://github.com/mne-tools/mne-python/releases/latest
 .. _`minimal working example`: https://en.wikipedia.org/wiki/Minimal_Working_Example
-.. _mri_watershed: https://freesurfer.net/fswiki/mri_watershed
+.. _mri_watershed: https://surfer.nmr.mgh.harvard.edu/fswiki/mri_watershed
 .. _mri_normalize: https://surfer.nmr.mgh.harvard.edu/fswiki/mri_normalize
 .. _freeview: https://surfer.nmr.mgh.harvard.edu/fswiki/FreeviewGuide/FreeviewIntroduction
 .. _`FreeSurfer listserv`: https://www.mail-archive.com/freesurfer@nmr.mgh.harvard.edu/

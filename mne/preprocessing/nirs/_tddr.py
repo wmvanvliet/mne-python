@@ -1,15 +1,14 @@
 # Authors: Robert Luke <mail@robertluke.net>
 #          Frank Fishburn
 #
-# License: BSD (3-clause)
+# License: BSD-3-Clause
 
 
 import numpy as np
 
-from ... import pick_types
 from ...io import BaseRaw
 from ...utils import _validate_type, verbose
-from ...io.pick import _picks_to_idx
+from ..nirs import _validate_nirs_info
 
 
 @verbose
@@ -33,6 +32,11 @@ def temporal_derivative_distribution_repair(raw, *, verbose=None):
 
     Notes
     -----
+    TDDR was initially designed to be used on optical density fNIRS data but
+    has been enabled to be applied on hemoglobin concentration fNIRS data as
+    well in MNE. We recommend applying the algorithm to optical density fNIRS
+    data as intended by the original author wherever possible.
+
     There is a shorter alias ``mne.preprocessing.nirs.tddr`` that can be used
     instead of this function (e.g. if line length is an issue).
 
@@ -41,14 +45,15 @@ def temporal_derivative_distribution_repair(raw, *, verbose=None):
     .. footbibliography::
     """
     raw = raw.copy().load_data()
-    _validate_type(raw, BaseRaw, 'raw')
+    _validate_type(raw, BaseRaw, "raw")
+    picks = _validate_nirs_info(raw.info)
 
-    if not len(pick_types(raw.info, fnirs='fnirs_od')):
-        raise RuntimeError('TDDR should be run on optical density data.')
-
-    picks = _picks_to_idx(raw.info, 'fnirs_od', exclude=[])
+    if not len(picks):
+        raise RuntimeError(
+            "TDDR should be run on optical density or " "hemoglobin data."
+        )
     for pick in picks:
-        raw._data[pick] = _TDDR(raw._data[pick], raw.info['sfreq'])
+        raw._data[pick] = _TDDR(raw._data[pick], raw.info["sfreq"])
 
     return raw
 
@@ -73,14 +78,15 @@ def _TDDR(signal, sample_rate):
     #   signals_corrected = TDDR( signals , sample_rate );
     #
     # Inputs:
-    #   signals: A [sample x channel] matrix of uncorrected optical density
-    #            data
+    #   signals: A [sample x channel] matrix of uncorrected optical density or
+    #            hemoglobin data
     #   sample_rate: A scalar reflecting the rate of acquisition in Hz
     #
     # Outputs:
     #   signals_corrected: A [sample x channel] matrix of corrected optical
     #   density data
     from scipy.signal import butter, filtfilt
+
     signal = np.array(signal)
     if len(signal.shape) != 1:
         for ch in range(signal.shape[1]):
@@ -88,7 +94,7 @@ def _TDDR(signal, sample_rate):
         return signal
 
     # Preprocess: Separate high and low frequencies
-    filter_cutoff = .5
+    filter_cutoff = 0.5
     filter_order = 3
     Fc = filter_cutoff * 2 / sample_rate
     signal_mean = np.mean(signal)
@@ -115,7 +121,6 @@ def _TDDR(signal, sample_rate):
 
     # Step 3. Iterative estimation of robust weights
     while iter < 50:
-
         iter = iter + 1
         mu0 = mu
 
@@ -129,6 +134,8 @@ def _TDDR(signal, sample_rate):
         sigma = 1.4826 * np.median(dev)
 
         # Step 3d. Scale deviations by standard deviation and tuning parameter
+        if sigma == 0:
+            break
         r = dev / (sigma * tune)
 
         # Step 3e. Calculate new weights according to Tukey's biweight function

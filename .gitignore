@@ -41,6 +41,7 @@ MNE-brainstorm-data*
 physionet-sleep-data*
 MEGSIM*
 build
+mne/_version.py
 coverage
 htmlcov
 .cache/
@@ -56,14 +57,19 @@ doc/auto_examples/
 doc/auto_tutorials/
 doc/modules/generated/
 doc/sphinxext/cachedir
+tutorials/intro/report.h5
+tutorials/intro/report_partial.hdf5
 tutorials/misc/report.h5
+tutorials/io/fnirs.csv
 pip-log.txt
 .coverage*
+coverage.xml
 tags
 doc/coverages
 doc/samples
 doc/*.dat
 doc/fil-result
+doc/optipng.exe
 cover
 *.html
 
@@ -85,3 +91,6 @@ cover
 .venv/
 venv/
 *.json
+.hypothesis/
+.ruff_cache/
+.ipynb_checkpoints/

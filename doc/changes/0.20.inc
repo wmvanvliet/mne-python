@@ -1,16 +1,7 @@
-.. NOTE: we are now using links to highlight new functions and classes.
-   Please follow the examples below like :func:`mne.stats.f_mway_rm`, so the
-   whats_new page will have a link to the function/class documentation.
-
-.. NOTE: there are 3 separate sections for changes, based on type:
-   - "Changelog" for new features
-   - "Bug" for bug fixes
-   - "API" for backward-incompatible changes
-
 .. _changes_0_20:
 
-Version 0.20
-------------
+Version 0.20 (2020-03-27)
+-------------------------
 
 Changelog
 ~~~~~~~~~
@@ -65,7 +56,7 @@ Changelog
 
 - Add the ability to ``return_event_id`` in :func:`mne.read_events` for use with MNE-C produced ``-annot.fif`` files, by `Eric Larson`_
 
-- Add option to :func:`mne.connectivity.spectral_connectivity` to compute corrected imaginary PLV by `Adonay Nunes`_
+- Add option to ``mne.connectivity.spectral_connectivity`` to compute corrected imaginary PLV by `Adonay Nunes`_
 
 - Add :func:`mne.SourceEstimate.estimate_snr` to estimate source-space SNR, by `Kaisu Lankinen`_ and `Padma Sundaram`_
 
@@ -263,7 +254,7 @@ Bug
 
 - Fix the automatic scaling of the glyphs in :func:`mne.viz.plot_vector_source_estimates` by using 10% of the brain width, by `Guillaume Favelier`_
 
-- Fix handling of missing values (NaNs) in :func:`mne.time_frequency.psd_welch` by `Clemens Brunner`_
+- Fix handling of missing values (NaNs) in ``mne.time_frequency.psd_welch`` by `Clemens Brunner`_
 
 - Fix :class:`mne.decoding.LinearModel` to support the refitted estimator of ``GridSearchCV`` in ``sklearn`` by `Chun-Hui Li`_
 
@@ -348,7 +339,7 @@ API
 
 - :meth:`mne.io.Raw.pick_channels`, :meth:`mne.Epochs.pick_channels` and :meth:`mne.Evoked.pick_channels` now have an ``ordered`` parameter to enforce the ordering of the picked channels by `Marijn van Vliet`_
 
-- New methods :meth:`mne.Forward.pick_channels`, :meth:`mne.Covariance.pick_channels`, :meth:`mne.Info.pick_channels`, :meth:`mne.time_frequency.CrossSpectralDensity.pick_channels` by `Marijn van Vliet`_
+- New methods :meth:`mne.Forward.pick_channels`, :meth:`mne.Covariance.pick_channels`, ``mne.Info.pick_channels``, :meth:`mne.time_frequency.CrossSpectralDensity.pick_channels` by `Marijn van Vliet`_
 
 - New attributes ``mne.Forward.ch_names`` and ``mne.Info.ch_names`` by `Marijn van Vliet`_
 
@@ -356,7 +347,7 @@ API
 
 - Drop ``unit`` keyword argument from :func:`mne.channels.read_custom_montage`, as it was unused by `Richard Höchenberger`_
 
-- Deprecate ``mne.preprocessing.run_ica``, use :meth:`mne.preprocessing.ICA.detect_artifacts` instead by `Richard Höchenberger`_
+- Deprecate ``mne.preprocessing.run_ica``, use ``mne.preprocessing.ICA.detect_artifacts`` instead by `Richard Höchenberger`_
 
 Authors
 ~~~~~~~

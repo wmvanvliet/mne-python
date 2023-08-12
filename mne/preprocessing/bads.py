@@ -1,5 +1,5 @@
 # Authors: Denis Engemann <denis.engemann@gmail.com>
-# License: BSD (3-clause)
+# License: BSD-3-Clause
 
 
 import numpy as np
@@ -30,6 +30,7 @@ def _find_outliers(X, threshold=3.0, max_iter=2, tail=0):
         The outlier indices.
     """
     from scipy.stats import zscore
+
     my_mask = np.zeros(len(X), dtype=bool)
     for _ in range(max_iter):
         X = np.ma.masked_array(X, my_mask)
