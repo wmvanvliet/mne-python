@@ -5,9 +5,8 @@
 Getting averaging info from .fif files
 ======================================
 
-Parse averaging information defined in Elekta Vectorview/TRIUX DACQ (data
-acquisition). Extract and average epochs accordingly. Modify some
-averaging parameters and get epochs.
+Parse averaging information defined in Elekta Vectorview/TRIUX DACQ (data acquisition).
+Extract and average epochs accordingly. Modify some averaging parameters and get epochs.
 """
 # Author: Jussi Nurminen (jnu@iki.fi)
 #
@@ -16,8 +15,9 @@ averaging parameters and get epochs.
 # %%
 
 
-import mne
 import os
+
+import mne
 from mne.datasets import multimodal
 
 fname_raw = os.path.join(multimodal.data_path(), "multimodal_raw.fif")

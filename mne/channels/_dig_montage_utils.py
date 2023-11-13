@@ -11,12 +11,10 @@
 #
 # License: Simplified BSD
 
-import xml.etree.ElementTree as ElementTree
-
 import numpy as np
+from defusedxml import ElementTree
 
-
-from ..utils import _check_fname, Bunch, warn
+from ..utils import Bunch, _check_fname, warn
 
 
 def _read_dig_montage_egi(

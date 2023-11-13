@@ -10,21 +10,20 @@
 #
 # License: BSD-3-Clause
 
-from datetime import datetime, timezone, timedelta
 import os
 import re
+from datetime import datetime, timedelta, timezone
 
 import numpy as np
+from scipy.interpolate import interp1d
 
-from ...utils import verbose, logger, warn, _validate_type
-from ..utils import _blk_read_lims, _mult_cal_one
-from ..base import BaseRaw, _get_scaling
-from ..meas_info import _empty_info, _unique_channel_names
-from ..constants import FIFF
-from ...filter import resample
-from ...utils import fill_doc
+from ..._fiff.constants import FIFF
+from ..._fiff.meas_info import _empty_info, _unique_channel_names
+from ..._fiff.utils import _blk_read_lims, _mult_cal_one
 from ...annotations import Annotations
-
+from ...filter import resample
+from ...utils import _validate_type, fill_doc, logger, verbose, warn
+from ..base import BaseRaw, _get_scaling
 
 # common channel type names mapped to internal ch types
 CH_TYPE_MAPPING = {
@@ -192,7 +191,6 @@ class RawEDF(BaseRaw):
         )
 
         # Read annotations from file and set it
-        onset, duration, desc = list(), list(), list()
         if len(edf_info["tal_idx"]) > 0:
             # Read TAL data exploiting the header info (no regexp)
             idx = np.empty(0, int)
@@ -205,16 +203,12 @@ class RawEDF(BaseRaw):
                 np.ones((len(idx), 1)),
                 None,
             )
-            onset, duration, desc = _read_annotations_edf(
+            annotations = _read_annotations_edf(
                 tal_data[0],
+                ch_names=info["ch_names"],
                 encoding=encoding,
             )
-
-        self.set_annotations(
-            Annotations(
-                onset=onset, duration=duration, description=desc, orig_time=None
-            )
-        )
+            self.set_annotations(annotations, on_missing="warn")
 
     def _read_segment_file(self, data, idx, fi, start, stop, cals, mult):
         """Read a chunk of raw data."""
@@ -352,8 +346,6 @@ def _read_ch(fid, subtype, samp, dtype_byte, dtype=None):
 
 def _read_segment_file(data, idx, fi, start, stop, raw_extras, filenames, cals, mult):
     """Read a chunk of raw data."""
-    from scipy.interpolate import interp1d
-
     n_samps = raw_extras["n_samps"]
     buf_len = int(raw_extras["max_samp"])
     dtype = raw_extras["dtype_np"]
@@ -644,6 +636,49 @@ def _get_info(
     info["chs"] = chs
     info["ch_names"] = ch_names
 
+    # Subject information
+    info["subject_info"] = {}
+
+    # String subject identifier
+    if edf_info["subject_info"].get("id") is not None:
+        info["subject_info"]["his_id"] = edf_info["subject_info"]["id"]
+    # Subject sex (0=unknown, 1=male, 2=female)
+    if edf_info["subject_info"].get("sex") is not None:
+        if edf_info["subject_info"]["sex"] == "M":
+            info["subject_info"]["sex"] = 1
+        elif edf_info["subject_info"]["sex"] == "F":
+            info["subject_info"]["sex"] = 2
+        else:
+            info["subject_info"]["sex"] = 0
+    # Subject names (first, middle, last).
+    if edf_info["subject_info"].get("name") is not None:
+        sub_names = edf_info["subject_info"]["name"].split("_")
+        if len(sub_names) < 2 or len(sub_names) > 3:
+            info["subject_info"]["last_name"] = edf_info["subject_info"]["name"]
+        elif len(sub_names) == 2:
+            info["subject_info"]["first_name"] = sub_names[0]
+            info["subject_info"]["last_name"] = sub_names[1]
+        else:
+            info["subject_info"]["first_name"] = sub_names[0]
+            info["subject_info"]["middle_name"] = sub_names[1]
+            info["subject_info"]["last_name"] = sub_names[2]
+    # Birthday in (year, month, day) format.
+    if isinstance(edf_info["subject_info"].get("birthday"), datetime):
+        info["subject_info"]["birthday"] = (
+            edf_info["subject_info"]["birthday"].year,
+            edf_info["subject_info"]["birthday"].month,
+            edf_info["subject_info"]["birthday"].day,
+        )
+    # Handedness (1=right, 2=left, 3=ambidextrous).
+    if edf_info["subject_info"].get("hand") is not None:
+        info["subject_info"]["hand"] = int(edf_info["subject_info"]["hand"])
+    # Height in meters.
+    if edf_info["subject_info"].get("height") is not None:
+        info["subject_info"]["height"] = float(edf_info["subject_info"]["height"])
+    # Weight in kilograms.
+    if edf_info["subject_info"].get("weight") is not None:
+        info["subject_info"]["weight"] = float(edf_info["subject_info"]["weight"])
+
     # Filter settings
     highpass = edf_info["highpass"]
     lowpass = edf_info["lowpass"]
@@ -766,7 +801,7 @@ def _read_edf_header(fname, exclude, infer_types, include=None):
         id_info = id_info.split(" ")
         if len(id_info):
             patient["id"] = id_info[0]
-            if len(id_info) == 4:
+            if len(id_info) >= 4:
                 try:
                     birthdate = datetime.strptime(id_info[2], "%d-%b-%Y")
                 except ValueError:
@@ -774,6 +809,16 @@ def _read_edf_header(fname, exclude, infer_types, include=None):
                 patient["sex"] = id_info[1]
                 patient["birthday"] = birthdate
                 patient["name"] = id_info[3]
+                if len(id_info) > 4:
+                    for info in id_info[4:]:
+                        if "=" in info:
+                            key, value = info.split("=")
+                            if key in ["weight", "height"]:
+                                patient[key] = float(value)
+                            elif key in ["hand"]:
+                                patient[key] = int(value)
+                            else:
+                                warn(f"Invalid patient information {key}")
 
         # Recording ID
         meas_id = {}
@@ -1061,7 +1106,7 @@ def _read_gdf_header(fname, exclude, include=None):
                     "Header information is incorrect for record length. "
                     "Default record length set to 1."
                 )
-            nchan = np.fromfile(fid, UINT32, 1)[0]
+            nchan = int(np.fromfile(fid, UINT32, 1)[0])
             channels = list(range(nchan))
             ch_names = [_edf_str(fid.read(16)).strip() for ch in channels]
             exclude = _find_exclude_idx(ch_names, exclude, include)
@@ -1132,7 +1177,7 @@ def _read_gdf_header(fname, exclude, include=None):
             fid.seek(etp)
             etmode = np.fromfile(fid, UINT8, 1)[0]
             if etmode in (1, 3):
-                sr = np.fromfile(fid, UINT8, 3)
+                sr = np.fromfile(fid, UINT8, 3).astype(np.uint32)
                 event_sr = sr[0]
                 for i in range(1, len(sr)):
                     event_sr = event_sr + sr[i] * 2 ** (i * 8)
@@ -1252,7 +1297,7 @@ def _read_gdf_header(fname, exclude, include=None):
                     "Default record length set to 1."
                 )
 
-            nchan = np.fromfile(fid, UINT16, 1)[0]
+            nchan = int(np.fromfile(fid, UINT16, 1)[0])
             fid.seek(2, 1)  # 2bytes reserved
 
             # Channels (variable header)
@@ -1398,7 +1443,7 @@ def _read_gdf_header(fname, exclude, include=None):
                 else:
                     chn = np.zeros(n_events, dtype=np.uint32)
                     dur = np.ones(n_events, dtype=np.uint32)
-                np.clip(dur, 1, np.inf, out=dur)
+                np.maximum(dur, 1, out=dur)
                 events = [n_events, pos, typ, chn, dur]
                 edf_info["event_sfreq"] = event_sr
 
@@ -1503,7 +1548,7 @@ def _find_exclude_idx(ch_names, exclude, include=None):
 def _find_tal_idx(ch_names):
     # Annotations / TAL Channels
     accepted_tal_ch_names = ["EDF Annotations", "BDF Annotations"]
-    tal_channel_idx = np.where(np.in1d(ch_names, accepted_tal_ch_names))[0]
+    tal_channel_idx = np.where(np.isin(ch_names, accepted_tal_ch_names))[0]
     return tal_channel_idx
 
 
@@ -1833,7 +1878,7 @@ def read_raw_gdf(
     input_fname = os.path.abspath(input_fname)
     ext = os.path.splitext(input_fname)[1][1:].lower()
     if ext != "gdf":
-        raise NotImplementedError(f"Only BDF files are supported, got {ext}.")
+        raise NotImplementedError(f"Only GDF files are supported, got {ext}.")
     return RawGDF(
         input_fname=input_fname,
         eog=eog,
@@ -1847,31 +1892,27 @@ def read_raw_gdf(
 
 
 @fill_doc
-def _read_annotations_edf(annotations, encoding="utf8"):
+def _read_annotations_edf(annotations, ch_names=None, encoding="utf8"):
     """Annotation File Reader.
 
     Parameters
     ----------
     annotations : ndarray (n_chans, n_samples) | str
         Channel data in EDF+ TAL format or path to annotation file.
+    ch_names : list of string
+        List of channels' names.
     %(encoding_edf)s
 
     Returns
     -------
-    onset : array of float, shape (n_annotations,)
-        The starting time of annotations in seconds after ``orig_time``.
-    duration : array of float, shape (n_annotations,)
-        Durations of the annotations in seconds.
-    description : array of str, shape (n_annotations,)
-        Array of strings containing description for each annotation. If a
-        string, all the annotations are given the same description. To reject
-        epochs, use description starting with keyword 'bad'. See example above.
+    annot : instance of Annotations
+        The annotations.
     """
     pat = "([+-]\\d+\\.?\\d*)(\x15(\\d+\\.?\\d*))?(\x14.*?)\x14\x00"
     if isinstance(annotations, str):
         with open(annotations, "rb") as annot_file:
             triggers = re.findall(pat.encode(), annot_file.read())
-            triggers = [tuple(map(lambda x: x.decode(), t)) for t in triggers]
+            triggers = [tuple(map(lambda x: x.decode(encoding), t)) for t in triggers]
     else:
         tals = bytearray()
         annotations = np.atleast_2d(annotations)
@@ -1897,14 +1938,35 @@ def _read_annotations_edf(annotations, encoding="utf8"):
                 " You might want to try setting \"encoding='latin1'\"."
             ) from e
 
-    events = []
+    events = {}
     offset = 0.0
     for k, ev in enumerate(triggers):
         onset = float(ev[0]) + offset
         duration = float(ev[2]) if ev[2] else 0
         for description in ev[3].split("\x14")[1:]:
             if description:
-                events.append([onset, duration, description])
+                if (
+                    "@@" in description
+                    and ch_names is not None
+                    and description.split("@@")[1] in ch_names
+                ):
+                    description, ch_name = description.split("@@")
+                    key = f"{onset}_{duration}_{description}"
+                else:
+                    ch_name = None
+                    key = f"{onset}_{duration}_{description}"
+                    if key in events:
+                        key += f"_{k}"  # make key unique
+                if key in events and ch_name:
+                    events[key][3] += (ch_name,)
+                else:
+                    events[key] = [
+                        onset,
+                        duration,
+                        description,
+                        (ch_name,) if ch_name else (),
+                    ]
+
             elif k == 0:
                 # The startdate/time of a file is specified in the EDF+ header
                 # fields 'startdate of recording' and 'starttime of recording'.
@@ -1916,7 +1978,20 @@ def _read_annotations_edf(annotations, encoding="utf8"):
                 # header. If X=0, then the .X may be omitted.
                 offset = -onset
 
-    return zip(*events) if events else (list(), list(), list())
+    if events:
+        onset, duration, description, annot_ch_names = zip(*events.values())
+    else:
+        onset, duration, description, annot_ch_names = list(), list(), list(), list()
+
+    assert len(onset) == len(duration) == len(description) == len(annot_ch_names)
+
+    return Annotations(
+        onset=onset,
+        duration=duration,
+        description=description,
+        orig_time=None,
+        ch_names=annot_ch_names,
+    )
 
 
 def _get_annotations_gdf(edf_info, sfreq):

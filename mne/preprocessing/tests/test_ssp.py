@@ -1,14 +1,14 @@
 from pathlib import Path
 
+import numpy as np
 import pytest
 from numpy.testing import assert_array_almost_equal
-import numpy as np
 
-from mne.io import read_raw_fif, read_raw_ctf
-from mne.io.proj import make_projector, activate_proj
-from mne.preprocessing.ssp import compute_proj_ecg, compute_proj_eog
-from mne.datasets import testing
 from mne import pick_types
+from mne._fiff.proj import activate_proj, make_projector
+from mne.datasets import testing
+from mne.io import read_raw_ctf, read_raw_fif
+from mne.preprocessing.ssp import compute_proj_ecg, compute_proj_eog
 
 data_path = Path(__file__).parent.parent.parent / "io" / "tests" / "data"
 raw_fname = data_path / "test_raw.fif"
@@ -20,7 +20,7 @@ ctf_fname = testing.data_path(download=False) / "CTF" / "testdata_ctf.ds"
 @pytest.fixture()
 def short_raw():
     """Create a short, picked raw instance."""
-    raw = read_raw_fif(raw_fname).crop(0, 7).pick_types(meg=True, eeg=True, eog=True)
+    raw = read_raw_fif(raw_fname).crop(0, 7).pick(["meg", "eeg", "eog"])
     raw.pick(raw.ch_names[:306:10] + raw.ch_names[306:]).load_data()
     raw.info.normalize_proj()
     return raw

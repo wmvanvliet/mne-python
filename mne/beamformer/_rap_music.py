@@ -6,13 +6,14 @@
 # License: BSD-3-Clause
 
 import numpy as np
+from scipy import linalg
 
+from .._fiff.pick import pick_channels_forward, pick_info
 from ..fixes import _safe_svd
-from ..forward import is_fixed_orient, convert_forward_solution
-from ..io.pick import pick_info, pick_channels_forward
+from ..forward import convert_forward_solution, is_fixed_orient
 from ..inverse_sparse.mxne_inverse import _make_dipoles_sparse
 from ..minimum_norm.inverse import _log_exp_var
-from ..utils import logger, verbose, _check_info_inv, fill_doc
+from ..utils import _check_info_inv, fill_doc, logger, verbose
 from ._compute_beamformer import _prepare_beamformer_input
 
 
@@ -48,8 +49,6 @@ def _apply_rap_music(
         Data explained by the dipoles using a least square fitting with the
         selected active dipoles and their estimated orientation.
     """
-    from scipy import linalg
-
     info = pick_info(info, picks)
     del picks
     # things are much simpler if we avoid surface orientation

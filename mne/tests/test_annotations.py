@@ -5,46 +5,46 @@
 
 import sys
 from collections import OrderedDict
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from itertools import repeat
 from pathlib import Path
 
-import pytest
-from pytest import approx
-from numpy.testing import (
-    assert_equal,
-    assert_array_equal,
-    assert_array_almost_equal,
-    assert_allclose,
-)
-
 import numpy as np
+import pytest
+from numpy.testing import (
+    assert_allclose,
+    assert_array_almost_equal,
+    assert_array_equal,
+    assert_equal,
+)
+from pytest import approx
 
 import mne
 from mne import (
-    create_info,
-    read_annotations,
+    Annotations,
+    Epochs,
     annotations_from_events,
-    events_from_annotations,
     count_annotations,
+    create_info,
+    events_from_annotations,
+    read_annotations,
 )
-from mne import Epochs, Annotations
-from mne.utils import (
-    catch_logging,
-    assert_and_remove_boundary_annot,
-    _raw_annot,
-    _dt_to_stamp,
-    _stamp_to_dt,
-    check_version,
-    _record_warnings,
-)
-from mne.io import read_raw_fif, RawArray, concatenate_raws
 from mne.annotations import (
-    _sync_onset,
     _handle_meas_date,
     _read_annotations_txt_parse_header,
+    _sync_onset,
 )
 from mne.datasets import testing
+from mne.io import RawArray, concatenate_raws, read_raw_fif
+from mne.utils import (
+    _dt_to_stamp,
+    _raw_annot,
+    _record_warnings,
+    _stamp_to_dt,
+    assert_and_remove_boundary_annot,
+    catch_logging,
+    check_version,
+)
 
 data_path = testing.data_path(download=False)
 data_dir = data_path / "MEG" / "sample"
@@ -613,8 +613,8 @@ def test_annotation_epoching():
     raw = concatenate_raws([RawArray(data, info) for ii in range(3)])
     assert raw.annotations is not None
     assert len(raw.annotations) == 4
-    assert np.in1d(raw.annotations.description, ["BAD boundary"]).sum() == 2
-    assert np.in1d(raw.annotations.description, ["EDGE boundary"]).sum() == 2
+    assert np.isin(raw.annotations.description, ["BAD boundary"]).sum() == 2
+    assert np.isin(raw.annotations.description, ["EDGE boundary"]).sum() == 2
     assert_array_equal(raw.annotations.duration, 0.0)
     events = np.array([[a, 0, 1] for a in [0, 500, 1000, 1500, 2000]])
     epochs = Epochs(

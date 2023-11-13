@@ -87,7 +87,7 @@ I agree to the following:
 # respective repos, and make a new release of the dataset on GitHub. Then
 # update the checksum in the MNE_DATASETS dict below, and change version
 # here:                  ↓↓↓↓↓         ↓↓↓
-RELEASES = dict(testing="0.147", misc="0.26")
+RELEASES = dict(testing="0.149", misc="0.26")
 TESTING_VERSIONED = f'mne-testing-data-{RELEASES["testing"]}'
 MISC_VERSIONED = f'mne-misc-data-{RELEASES["misc"]}'
 
@@ -111,7 +111,7 @@ MNE_DATASETS = dict()
 # Testing and misc are at the top as they're updated most often
 MNE_DATASETS["testing"] = dict(
     archive_name=f"{TESTING_VERSIONED}.tar.gz",
-    hash="md5:63fa41e3067f330a6d029dcc1673a919",
+    hash="md5:86c47eb83426f48ff17338cb0e379754",
     url=(
         "https://codeload.github.com/mne-tools/mne-testing-data/"
         f'tar.gz/{RELEASES["testing"]}'
@@ -180,6 +180,14 @@ MNE_DATASETS["phantom_4dbti"] = dict(
     url="https://osf.io/v2brw/download?version=2",
     folder_name="MNE-phantom-4DBTi",
     config_key="MNE_DATASETS_PHANTOM_4DBTI_PATH",
+)
+
+MNE_DATASETS["phantom_kernel"] = dict(
+    archive_name="MNE-phantom-kernel.tar.gz",
+    hash="md5:4e2ad987dac1a20f95bae8ffeb2d41d6",
+    url="https://osf.io/dj7wz/download?version=1",
+    folder_name="MNE-phantom-kernel-data",
+    config_key="MNE_DATASETS_PHANTOM_KERNEL_PATH",
 )
 
 MNE_DATASETS["sample"] = dict(
@@ -345,9 +353,9 @@ MNE_DATASETS["fake"] = dict(
 
 # eyelink dataset
 MNE_DATASETS["eyelink"] = dict(
-    archive_name="eeg-eyetrack_data.zip",
-    hash="md5:c4fc788fe01737e08e9086c90cab642d",
-    url=("https://osf.io/63fjm/download?version=1"),
-    folder_name="eyelink-example-data",
+    archive_name="MNE-eyelink-data.zip",
+    hash="md5:68a6323ef17d655f1a659c3290ee1c3f",
+    url=("https://osf.io/xsu4g/download?version=1"),
+    folder_name="MNE-eyelink-data",
     config_key="MNE_DATASETS_EYELINK_PATH",
 )

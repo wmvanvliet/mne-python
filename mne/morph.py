@@ -9,36 +9,39 @@ import os.path as op
 import warnings
 
 import numpy as np
+from scipy import sparse
 
 from .fixes import _get_img_fdata
 from .morph_map import read_morph_map
 from .parallel import parallel_func
 from .source_estimate import (
+    _BaseSourceEstimate,
     _BaseSurfaceSourceEstimate,
     _BaseVolSourceEstimate,
-    _BaseSourceEstimate,
     _get_ico_tris,
 )
-from .source_space import SourceSpaces, _ensure_src, _grid_interp
-from .surface import mesh_edges, read_surface, _compute_nearest
+from .source_space._source_space import SourceSpaces, _ensure_src, _grid_interp
+from .surface import _compute_nearest, mesh_edges, read_surface
 from .utils import (
-    logger,
-    verbose,
-    check_version,
-    get_subjects_dir,
-    warn as warn_,
-    fill_doc,
-    _check_option,
-    _validate_type,
     BunchConst,
+    ProgressBar,
     _check_fname,
-    warn,
+    _check_option,
     _custom_lru_cache,
     _ensure_int,
-    ProgressBar,
-    use_log_level,
-    _import_nibabel,
     _import_h5io_funcs,
+    _import_nibabel,
+    _validate_type,
+    check_version,
+    fill_doc,
+    get_subjects_dir,
+    logger,
+    use_log_level,
+    verbose,
+    warn,
+)
+from .utils import (
+    warn as warn_,
 )
 
 
@@ -115,7 +118,7 @@ def compute_source_morph(
         Number of iterations for the smoothing of the surface data.
         If None, smooth is automatically defined to fill the surface
         with non-zero values. Can also be ``'nearest'`` to use the nearest
-        vertices on the surface (requires SciPy >= 1.3).
+        vertices on the surface.
 
         .. versionchanged:: 0.20
            Added support for 'nearest'.
@@ -605,7 +608,6 @@ class SourceMorph:
         return self
 
     def _morph_vols(self, vols, mesg, subselect=True):
-        from scipy import sparse
         from dipy.align.reslice import reslice
 
         interp = self.src_data["interpolator"].tocsc()[
@@ -776,7 +778,6 @@ def _debug_img(data, affine, title, shape=None):
     # Uncomment these lines for debugging help with volume morph:
     #
     # import nibabel as nib
-    # from scipy import sparse
     # if sparse.issparse(data):
     #     data = data.toarray()
     # data = np.asarray(data)
@@ -1027,10 +1028,12 @@ def _get_src_data(src, mri_resolution=True):
 def _triage_output(output):
     _check_option("output", output, ["nifti", "nifti1", "nifti2"])
     if output in ("nifti", "nifti1"):
-        from nibabel import Nifti1Image as NiftiImage, Nifti1Header as NiftiHeader
+        from nibabel import Nifti1Header as NiftiHeader
+        from nibabel import Nifti1Image as NiftiImage
     else:
         assert output == "nifti2"
-        from nibabel import Nifti2Image as NiftiImage, Nifti2Header as NiftiHeader
+        from nibabel import Nifti2Header as NiftiHeader
+        from nibabel import Nifti2Image as NiftiImage
     return NiftiImage, NiftiHeader
 
 
@@ -1141,8 +1144,9 @@ def _interpolate_data(stc, morph, mri_resolution, mri_space, output):
 
 def _compute_morph_sdr(mri_from, mri_to, niter_affine, niter_sdr, zooms):
     """Get a matrix that morphs data from one subject to another."""
-    from .transforms import _compute_volume_registration
     from dipy.align.imaffine import AffineMap
+
+    from .transforms import _compute_volume_registration
 
     pipeline = "all" if niter_sdr else "affines"
     niter = dict(
@@ -1176,8 +1180,6 @@ def _compute_morph_matrix(
     xhemi=False,
 ):
     """Compute morph matrix."""
-    from scipy import sparse
-
     logger.info("Computing morph matrix...")
     subjects_dir = get_subjects_dir(subjects_dir, raise_error=True)
 
@@ -1220,8 +1222,6 @@ def _compute_morph_matrix(
 
 
 def _hemi_morph(tris, vertices_to, vertices_from, smooth, maps, warn):
-    from scipy import sparse
-
     _validate_type(smooth, (str, None, "int-like"), "smoothing steps")
     if len(vertices_from) == 0:
         return sparse.csr_matrix((len(vertices_to), 0))
@@ -1335,13 +1335,10 @@ def grade_to_vertices(subject, grade, subjects_dir=None, n_jobs=None, verbose=No
 # Takes ~20 ms to hash, ~100 ms to compute (5x speedup)
 @_custom_lru_cache(20)
 def _surf_nearest(vertices, adj_mat):
-    from scipy import sparse
-    from scipy.sparse.csgraph import dijkstra
-
     # Vertices can be out of order, so sort them to start ...
     order = np.argsort(vertices)
     vertices = vertices[order]
-    _, _, sources = dijkstra(
+    _, _, sources = sparse.csgraph.dijkstra(
         adj_mat, False, indices=vertices, min_only=True, return_predecessors=True
     )
     col = np.searchsorted(vertices, sources)
@@ -1367,8 +1364,6 @@ def _csr_row_norm(data, row_norm):
 def _surf_upsampling_mat(idx_from, e, smooth):
     """Upsample data on a subject's surface given mesh edges."""
     # we're in CSR format and it's to==from
-    from scipy import sparse
-
     assert isinstance(e, sparse.csr_matrix)
     n_tot = e.shape[0]
     assert e.shape == (n_tot, n_tot)
@@ -1450,7 +1445,7 @@ def _get_zooms_orig(morph):
 def _check_vertices_match(v1, v2, name):
     if not np.array_equal(v1, v2):
         ext = ""
-        if np.in1d(v2, v1).all():
+        if np.isin(v2, v1).all():
             ext = " Vertices were likely excluded during forward computation."
         raise ValueError(
             "vertices do not match between morph (%s) and stc (%s) for %s:\n%s"

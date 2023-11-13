@@ -1,32 +1,33 @@
 """EGI NetStation Load Function."""
 
-from collections import OrderedDict
 import datetime
 import math
 import os.path as op
 import re
-from xml.dom.minidom import parse
+from collections import OrderedDict
 from pathlib import Path
 
 import numpy as np
+from defusedxml.minidom import parse
 
-from .events import _read_events, _combine_triggers
+from ..._fiff.constants import FIFF
+from ..._fiff.meas_info import _empty_info, _ensure_meas_date_none_or_dt, create_info
+from ..._fiff.proj import setup_proj
+from ..._fiff.utils import _create_chs, _mult_cal_one
+from ...annotations import Annotations
+from ...channels.montage import make_dig_montage
+from ...evoked import EvokedArray
+from ...utils import _check_fname, _check_option, logger, verbose, warn
+from ..base import BaseRaw
+from .events import _combine_triggers, _read_events
 from .general import (
-    _get_signalfname,
-    _get_ep_info,
+    _block_r,
     _extract,
     _get_blocks,
+    _get_ep_info,
     _get_gains,
-    _block_r,
+    _get_signalfname,
 )
-from ..base import BaseRaw
-from ..constants import FIFF
-from ..meas_info import _empty_info, create_info, _ensure_meas_date_none_or_dt
-from ..proj import setup_proj
-from ..utils import _create_chs, _mult_cal_one
-from ...annotations import Annotations
-from ...utils import verbose, logger, warn, _check_option, _check_fname
-from ...evoked import EvokedArray
 
 REFERENCE_NAMES = ("VREF", "Vertex Reference")
 
@@ -78,7 +79,7 @@ def _read_mff_header(filepath):
         # by what we need to (e.g., a sample rate of 500 means we can multiply
         # by 1 and divide by 2 rather than multiplying by 500 and dividing by
         # 1000)
-        numerator = signal_blocks["sfreq"]
+        numerator = int(signal_blocks["sfreq"])
         denominator = 1000
         this_gcd = math.gcd(numerator, denominator)
         numerator = numerator // this_gcd
@@ -286,8 +287,6 @@ def _get_eeg_calibration_info(filepath, egi_info):
 
 def _read_locs(filepath, egi_info, channel_naming):
     """Read channel locations."""
-    from ...channels.montage import make_dig_montage
-
     fname = op.join(filepath, "coordinates.xml")
     if not op.exists(fname):
         logger.warn("File coordinates.xml not found, not setting channel locations")
@@ -508,7 +507,17 @@ class RawMff(BaseRaw):
                 "    Excluding events {%s} ..."
                 % ", ".join([k for i, k in enumerate(event_codes) if i not in include_])
             )
-            events_ids = np.arange(len(include_)) + 1
+            if all(ch.startswith("D") for ch in include_names):
+                # support the DIN format DIN1, DIN2, ..., DIN9, DI10, DI11, ... DI99,
+                # D100, D101, ..., D255 that we get when sending 0-255 triggers on a
+                # parallel port.
+                events_ids = list()
+                for ch in include_names:
+                    while not ch[0].isnumeric():
+                        ch = ch[1:]
+                    events_ids.append(int(ch))
+            else:
+                events_ids = np.arange(len(include_)) + 1
             egi_info["new_trigger"] = _combine_triggers(
                 egi_events[include_], remapping=events_ids
             )
@@ -572,7 +581,7 @@ class RawMff(BaseRaw):
         if mon is not None:
             info.set_montage(mon, on_missing="ignore")
 
-        ref_idx = np.flatnonzero(np.in1d(mon.ch_names, REFERENCE_NAMES))
+        ref_idx = np.flatnonzero(np.isin(mon.ch_names, REFERENCE_NAMES))
         if len(ref_idx):
             ref_idx = ref_idx.item()
             ref_coords = info["chs"][int(ref_idx)]["loc"][:3]

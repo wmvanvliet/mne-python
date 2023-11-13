@@ -1,7 +1,5 @@
 :orphan:
 
-.. include:: ../changes/names.inc
-
 .. _governance-people:
 
 Current steering council and institutional partners
@@ -24,8 +22,6 @@ Steering Council
 * `Daniel McCloy`_
 * `Denis Engemann`_
 * `Eric Larson`_
-* `Guillaume Favelier`_
-* `Luke Bloy`_
 * `Mainak Jas`_
 * `Marijn van Vliet`_
 * `Mathieu Scheltienne`_

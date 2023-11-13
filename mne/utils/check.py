@@ -3,21 +3,22 @@
 #
 # License: BSD-3-Clause
 
-from builtins import input  # no-op here but facilitates testing
-from collections.abc import Sequence
-from difflib import get_close_matches
-from importlib import import_module
+import numbers
 import operator
 import os
-from pathlib import Path
 import re
-import numbers
+from builtins import input  # no-op here but facilitates testing
+from difflib import get_close_matches
+from importlib import import_module
+from importlib.metadata import version
+from pathlib import Path
 
 import numpy as np
+from packaging.version import parse
 
-from ..fixes import _median_complex, _compare_version
-from .docs import deprecated
-from ._logging import warn, logger, verbose, _record_warnings, _verbose_safe_false
+from ..defaults import HEAD_SIZE_DEFAULT, _handle_default
+from ..fixes import _compare_version, _median_complex
+from ._logging import _record_warnings, _verbose_safe_false, logger, verbose, warn
 
 
 def _ensure_int(x, name="unknown", must_be="an int", *, extra=""):
@@ -232,7 +233,7 @@ def _check_fname(
     *,
     verbose=None,
 ):
-    """Check for file existence, and return string of its absolute path."""
+    """Check for file existence, and return its absolute path."""
     _validate_type(fname, "path-like", name)
     fname = Path(fname).expanduser().absolute()
 
@@ -308,13 +309,15 @@ def _check_preload(inst, msg):
                 "loaded. Use preload=True (or string) in the constructor or "
                 "%s.load_data()." % (name, name)
             )
+        if name == "epochs":
+            inst._handle_empty("raise", msg)
 
 
 def _check_compensation_grade(info1, info2, name1, name2="data", ch_names=None):
     """Ensure that objects have same compensation_grade."""
-    from ..io import Info
-    from ..io.pick import pick_channels, pick_info
-    from ..io.compensator import get_current_comp
+    from .._fiff.compensator import get_current_comp
+    from .._fiff.meas_info import Info
+    from .._fiff.pick import pick_channels, pick_info
 
     for t_info in (info1, info2):
         if t_info is None:
@@ -409,7 +412,19 @@ def _check_eeglabio_installed(strict=True):
 
 def _check_edflib_installed(strict=True):
     """Aux function."""
-    return _soft_import("EDFlib", "exporting to EDF", strict=strict)
+    out = _soft_import("EDFlib", "exporting to EDF", strict=strict)
+    if out:
+        # EDFlib-Python 1.0.7 is not compatible with NumPy 2.0
+        # https://gitlab.com/Teuniz/EDFlib-Python/-/issues/10
+        ver = version("EDFlib-Python")
+        if parse(ver) <= parse("1.0.7") and parse(np.__version__).major >= 2:
+            if strict:  # pragma: no cover
+                raise RuntimeError(
+                    f"EDFlib version={ver} is not compatible with NumPy 2.0, consider "
+                    "upgrading EDFlib-Python"
+                )
+            out = False
+    return out
 
 
 def _check_pybv_installed(strict=True):
@@ -477,7 +492,7 @@ def _check_ch_locs(info, picks=None, ch_type=None):
         The channel type to restrict the check to. If ``None``, check all
         channel types. If provided, ``picks`` must be ``None``.
     """
-    from ..io.pick import _picks_to_idx, pick_info
+    from .._fiff.pick import _picks_to_idx, pick_info
 
     if picks is not None and ch_type is not None:
         raise ValueError("Either picks or ch_type may be provided, not both")
@@ -526,7 +541,7 @@ _multi = {
     "path-like": path_like,
     "int-like": (int_like,),
     "callable": (_Callable(),),
-    "array-like": (Sequence, np.ndarray),
+    "array-like": (list, tuple, set, np.ndarray),
 }
 
 
@@ -554,7 +569,7 @@ def _validate_type(item, types=None, item_name=None, type_name=None, *, extra=""
         _ensure_int(item, name=item_name, extra=extra)
         return  # terminate prematurely
     elif types == "info":
-        from mne.io import Info as types
+        from .._fiff.meas_info import Info as types
 
     if not isinstance(types, (list, tuple)):
         types = [types]
@@ -653,7 +668,7 @@ def _check_if_nan(data, msg=" to be plotted"):
 
 def _check_info_inv(info, forward, data_cov=None, noise_cov=None):
     """Return good channels common to forward model and covariance matrices."""
-    from .. import pick_types
+    from .._fiff.pick import pick_types
 
     # get a list of all channel names:
     fwd_ch_names = forward["info"]["ch_names"]
@@ -738,10 +753,9 @@ def _check_rank(rank):
 
 def _check_one_ch_type(method, info, forward, data_cov=None, noise_cov=None):
     """Check number of sensor types and presence of noise covariance matrix."""
-    from ..cov import make_ad_hoc_cov, Covariance
+    from .._fiff.pick import _contains_ch_type, pick_info
+    from ..cov import Covariance, make_ad_hoc_cov
     from ..time_frequency.csd import CrossSpectralDensity
-    from ..io.pick import pick_info
-    from ..channels.channels import _contains_ch_type
 
     if isinstance(data_cov, CrossSpectralDensity):
         _validate_type(noise_cov, [None, CrossSpectralDensity], "noise_cov")
@@ -774,8 +788,6 @@ def _check_one_ch_type(method, info, forward, data_cov=None, noise_cov=None):
 
 def _check_depth(depth, kind="depth_mne"):
     """Check depth options."""
-    from ..defaults import _handle_default
-
     if not isinstance(depth, dict):
         depth = dict(exp=None if depth is None else float(depth))
     return _handle_default(kind, depth)
@@ -933,7 +945,8 @@ def _check_qt_version(*, return_api=False, check_usable_display=True):
     from ..viz.backends._utils import _init_mne_qtapp
 
     try:
-        from qtpy import QtCore, API_NAME as api
+        from qtpy import API_NAME as api
+        from qtpy import QtCore
     except Exception:
         api = version = None
     else:
@@ -956,8 +969,7 @@ def _check_qt_version(*, return_api=False, check_usable_display=True):
 
 
 def _check_sphere(sphere, info=None, sphere_units="m"):
-    from ..defaults import HEAD_SIZE_DEFAULT
-    from ..bem import fit_sphere_to_headshape, ConductorModel, get_fitting_dig
+    from ..bem import ConductorModel, fit_sphere_to_headshape, get_fitting_dig
 
     if sphere is None:
         sphere = HEAD_SIZE_DEFAULT
@@ -1201,12 +1213,6 @@ def _to_rgb(*args, name="color", alpha=False):
             f'Invalid RGB{"A" if alpha else ""} argument(s) for {name}: '
             f"{repr(args)}"
         ) from None
-
-
-@deprecated("has_nibabel is deprecated and will be removed in 1.5")
-def has_nibabel():
-    """Check if nibabel is installed."""
-    return check_version("nibabel")  # pragma: no cover
 
 
 def _import_nibabel(why="use MRI files"):

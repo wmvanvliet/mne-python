@@ -24,10 +24,11 @@ References
 # %%
 
 import numpy as np
+
 import mne
+from mne import read_evokeds
 from mne.datasets import sample
 from mne.datasets.brainstorm import bst_raw
-from mne import read_evokeds
 from mne.viz import plot_arrowmap
 
 print(__doc__)
@@ -38,8 +39,8 @@ fname = path / "MEG" / "sample" / "sample_audvis-ave.fif"
 # load evoked data
 condition = "Left Auditory"
 evoked = read_evokeds(fname, condition=condition, baseline=(None, 0))
-evoked_mag = evoked.copy().pick_types(meg="mag")
-evoked_grad = evoked.copy().pick_types(meg="grad")
+evoked_mag = evoked.copy().pick(picks="mag", exclude="bads")
+evoked_grad = evoked.copy().pick(picks="grad", exclude="bads")
 
 # %%
 # Plot magnetometer data as an arrowmap along with the topoplot at the time

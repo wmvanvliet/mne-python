@@ -4,9 +4,9 @@
 
 import numpy as np
 
+from ..._fiff.constants import FIFF
 from ...io import BaseRaw
-from ...io.constants import FIFF
-from ...utils import logger, _check_preload, _validate_type, warn
+from ...utils import _check_preload, _validate_type, logger, warn
 
 
 def interpolate_blinks(raw, buffer=0.05, match="BAD_blink", interpolate_gaze=False):

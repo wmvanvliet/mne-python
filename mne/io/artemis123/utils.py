@@ -1,8 +1,10 @@
-import numpy as np
 import os.path as op
-from .._digitization import _artemis123_read_pos
-from ...utils import logger
+
+import numpy as np
+
+from ..._fiff._digitization import _artemis123_read_pos
 from ...transforms import rotation3d_align_z_axis
+from ...utils import logger
 
 
 def _load_mne_locs(fname=None):

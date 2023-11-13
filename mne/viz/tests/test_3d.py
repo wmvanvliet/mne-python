@@ -9,52 +9,53 @@
 
 from pathlib import Path
 
-import numpy as np
-from numpy.testing import assert_array_equal, assert_allclose
-import pytest
 import matplotlib.pyplot as plt
+import numpy as np
+import pytest
 from matplotlib.colors import Colormap
 from matplotlib.figure import Figure
+from numpy.testing import assert_allclose, assert_array_equal
 
 from mne import (
-    make_field_map,
-    read_evokeds,
-    read_trans,
-    read_dipole,
-    SourceEstimate,
-    make_sphere_model,
-    use_coil_def,
-    pick_types,
-    setup_volume_source_space,
-    read_forward_solution,
-    convert_forward_solution,
     MixedSourceEstimate,
+    SourceEstimate,
+    convert_forward_solution,
+    make_field_map,
+    make_sphere_model,
+    pick_info,
+    pick_types,
+    read_dipole,
+    read_evokeds,
+    read_forward_solution,
+    read_trans,
+    setup_volume_source_space,
+    use_coil_def,
 )
-from mne.source_estimate import _BaseVolSourceEstimate
-from mne.io import read_raw_ctf, read_raw_bti, read_raw_kit, read_info, read_raw_nirx
-from mne.io._digitization import write_dig
-from mne.io.pick import pick_info
-from mne.io.constants import FIFF
-from mne.minimum_norm import apply_inverse
-from mne.viz import (
-    plot_sparse_source_estimates,
-    plot_source_estimates,
-    snapshot_brain_montage,
-    plot_head_positions,
-    plot_alignment,
-    Figure3D,
-    plot_brain_colorbar,
-    link_brains,
-    mne_analyze_colormap,
-)
-from mne.viz._3d import _process_clim, _linearize_map, _get_map_ticks
-from mne.viz.utils import _fake_click, _fake_keypress, _fake_scroll, _get_cmap
-from mne.utils import catch_logging, _record_warnings
+from mne._fiff._digitization import write_dig
+from mne._fiff.constants import FIFF
+from mne.bem import read_bem_solution, read_bem_surfaces
 from mne.datasets import testing
+from mne.io import read_info, read_raw_bti, read_raw_ctf, read_raw_kit, read_raw_nirx
+from mne.minimum_norm import apply_inverse
+from mne.source_estimate import _BaseVolSourceEstimate
 from mne.source_space import read_source_spaces
 from mne.transforms import Transform
-from mne.bem import read_bem_solution, read_bem_surfaces
-
+from mne.utils import _record_warnings, catch_logging
+from mne.viz import (
+    Brain,
+    EvokedField,
+    Figure3D,
+    link_brains,
+    mne_analyze_colormap,
+    plot_alignment,
+    plot_brain_colorbar,
+    plot_head_positions,
+    plot_source_estimates,
+    plot_sparse_source_estimates,
+    snapshot_brain_montage,
+)
+from mne.viz._3d import _get_map_ticks, _linearize_map, _process_clim
+from mne.viz.utils import _fake_click, _fake_keypress, _fake_scroll, _get_cmap
 
 data_dir = testing.data_path(download=False)
 subjects_dir = data_dir / "subjects"
@@ -185,6 +186,64 @@ def test_plot_evoked_field(renderer):
             )
         evoked.plot_field(maps, time=0.1, n_contours=n_contours)
 
+    # Test plotting inside an existing Brain figure.
+    brain = Brain("fsaverage", "lh", "inflated", subjects_dir=subjects_dir)
+    fig = evoked.plot_field(maps, time=0.1, fig=brain)
+
+    # Test some methods
+    fig = evoked.plot_field(maps, time_viewer=True)
+    assert isinstance(fig, EvokedField)
+    fig._rescale()
+    fig.set_time(0.05)
+    fig.set_contours(10)
+    fig.set_vmax(2)
+
+    fig = evoked.plot_field(maps, time_viewer=False)
+    assert isinstance(fig, Figure3D)
+
+
+@testing.requires_testing_data
+@pytest.mark.slowtest
+def test_plot_evoked_field_notebook(renderer_notebook, nbexec):
+    """Test plotting the evoked field inside a notebook."""
+    import pytest
+
+    from mne import make_field_map, read_evokeds
+    from mne.datasets import testing
+    from mne.viz import Brain, EvokedField, Figure3D, set_3d_backend
+
+    set_3d_backend("notebook")
+
+    with pytest.MonkeyPatch().context() as mp:
+        mp.delenv("_MNE_FAKE_HOME_DIR")
+        data_path = testing.data_path(download=False)
+    evoked_fname = data_path / "MEG" / "sample" / "sample_audvis_trunc-ave.fif"
+    trans_fname = data_path / "MEG" / "sample" / "sample_audvis_trunc-trans.fif"
+    subjects_dir = data_path / "subjects"
+
+    evoked = read_evokeds(evoked_fname, condition="Left Auditory", baseline=(-0.2, 0.0))
+    evoked.pick(evoked.ch_names[::10])  # speed
+    with pytest.warns(RuntimeWarning, match="projection"):
+        maps = make_field_map(
+            evoked,
+            trans_fname,
+            subject="sample",
+            subjects_dir=subjects_dir,
+            n_jobs=None,
+            ch_type="meg",
+        )
+
+    # Test plotting the evoked field
+    fig = evoked.plot_field(maps, time_viewer=True)
+    assert isinstance(fig, EvokedField)
+    fig = evoked.plot_field(maps, time_viewer=False)
+    assert isinstance(fig, Figure3D)
+
+    # Test plotting inside an existing Brain figure. This should not work in a notebook.
+    brain = Brain("fsaverage", "lh", "inflated", subjects_dir=subjects_dir)
+    with pytest.raises(NotImplementedError):
+        fig = evoked.plot_field(maps, time=0.1, fig=brain)
+
 
 def _assert_n_actors(fig, renderer, n_actors):
     __tracebackhide__ = True
@@ -218,9 +277,14 @@ def test_plot_alignment_meg(renderer, system):
         assert system == "KIT"
         this_info = read_raw_kit(sqd_fname).info
 
-    meg = ["helmet", "sensors"]
+    meg = {"helmet": 0.1, "sensors": 0.2}
+    sensor_colors = "k"  # should be upsampled to correct shape
     if system == "KIT":
-        meg.append("ref")
+        meg["ref"] = 0.3
+        with pytest.raises(TypeError, match="instance of dict"):
+            plot_alignment(this_info, meg=meg, sensor_colors=sensor_colors)
+        sensor_colors = dict(meg=sensor_colors)
+        sensor_colors["ref_meg"] = ["r"] * len(pick_types(this_info, ref_meg=True))
     fig = plot_alignment(
         this_info,
         read_trans(trans_fname),
@@ -228,6 +292,7 @@ def test_plot_alignment_meg(renderer, system):
         subjects_dir=subjects_dir,
         meg=meg,
         eeg=False,
+        sensor_colors=sensor_colors,
     )
     assert isinstance(fig, Figure3D)
     # count the number of objects: should be n_meg_ch + 1 (helmet) + 1 (head)

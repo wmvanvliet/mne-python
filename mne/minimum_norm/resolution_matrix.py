@@ -8,14 +8,15 @@ import numpy as np
 
 from mne.minimum_norm.inverse import InverseOperator
 
-from .. import pick_channels_forward, EvokedArray
-from ..io.constants import FIFF
-from ..utils import logger, verbose, _validate_type
-from ..forward.forward import convert_forward_solution, Forward
-from ..minimum_norm import apply_inverse
-from ..source_estimate import _prepare_label_extraction, _make_stc, _get_src_type
-from ..source_space import SourceSpaces, _get_vertno
+from .._fiff.constants import FIFF
+from .._fiff.pick import pick_channels_forward
+from ..evoked import EvokedArray
+from ..forward.forward import Forward, convert_forward_solution
 from ..label import Label
+from ..source_estimate import _get_src_type, _make_stc, _prepare_label_extraction
+from ..source_space._source_space import SourceSpaces, _get_vertno
+from ..utils import _validate_type, logger, verbose
+from .inverse import apply_inverse
 
 
 @verbose
@@ -77,7 +78,7 @@ def _get_psf_ctf(
     norm,
     return_pca_vars,
     vector=False,
-    verbose=None
+    verbose=None,
 ):
     """Get point-spread (PSFs) or cross-talk (CTFs) functions."""
     # check for consistencies in input parameters
@@ -139,7 +140,7 @@ def _get_psf_ctf(
 
     for verts in verts_all:
         # get relevant PSFs or CTFs for specified vertices
-        if type(verts) is int:
+        if isinstance(verts, int):
             verts = [verts]  # to keep array dimensions
         funcs = resmat[:, verts]
 
@@ -217,7 +218,7 @@ def _vertices_for_get_psf_ctf(idx, src):
 
         for v in verts_labs:
             # if two hemispheres present
-            if type(v) is list:
+            if isinstance(v, list):
                 # indices for both hemispheres in one list
                 this_verts = np.concatenate((v[0], v[1]))
             else:
@@ -301,7 +302,7 @@ def get_point_spread(
     norm=False,
     return_pca_vars=False,
     vector=False,
-    verbose=None
+    verbose=None,
 ):
     """Get point-spread (PSFs) functions for vertices.
 
@@ -350,7 +351,7 @@ def get_cross_talk(
     norm=False,
     return_pca_vars=False,
     vector=False,
-    verbose=None
+    verbose=None,
 ):
     """Get cross-talk (CTFs) function for vertices.
 

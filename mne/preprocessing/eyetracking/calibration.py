@@ -9,6 +9,7 @@ from copy import deepcopy
 
 import numpy as np
 
+from ...io.eyelink._utils import _parse_calibration
 from ...utils import _check_fname, _validate_type, fill_doc, logger
 from ...viz.utils import plt_show
 
@@ -146,7 +147,7 @@ class Calibration(dict):
             ax = axes
             fig = ax.get_figure()
         else:  # create new figure and axes
-            fig, ax = plt.subplots(constrained_layout=True)
+            fig, ax = plt.subplots(layout="constrained")
         px, py = self["positions"].T
         gaze_x, gaze_y = self["gaze"].T
 
@@ -216,8 +217,6 @@ def read_eyelink_calibration(
         A list of :class:`~mne.preprocessing.eyetracking.Calibration` instances, one for
         each eye of every calibration that was performed during the recording session.
     """
-    from ...io.eyelink._utils import _parse_calibration
-
     fname = _check_fname(fname, overwrite="read", must_exist=True, name="fname")
     logger.info("Reading calibration data from {}".format(fname))
     lines = fname.read_text(encoding="ASCII").splitlines()

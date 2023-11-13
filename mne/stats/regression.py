@@ -6,16 +6,17 @@
 #
 # License: BSD-3-Clause
 
-from inspect import isgenerator
 from collections import namedtuple
+from inspect import isgenerator
 
 import numpy as np
+from scipy import linalg, sparse, stats
 
-from ..source_estimate import SourceEstimate
+from .._fiff.pick import _picks_to_idx, pick_info, pick_types
 from ..epochs import BaseEpochs
 from ..evoked import Evoked, EvokedArray
-from ..utils import logger, _reject_data_segments, warn, fill_doc
-from ..io.pick import pick_types, pick_info, _picks_to_idx
+from ..source_estimate import SourceEstimate
+from ..utils import _reject_data_segments, fill_doc, logger, warn
 
 
 def linear_regression(inst, design_matrix, names=None):
@@ -75,7 +76,7 @@ def linear_regression(inst, design_matrix, names=None):
         if [inst.ch_names[p] for p in picks] != inst.ch_names:
             warn("Fitting linear model to non-data or bad channels. " "Check picking")
         msg = "Fitting linear model to epochs"
-        data = inst.get_data()
+        data = inst.get_data(copy=False)
         out = EvokedArray(np.zeros(data.shape[1:]), inst.info, inst.tmin)
     elif isgenerator(inst):
         msg = "Fitting linear model to source estimates (generator input)"
@@ -108,8 +109,6 @@ def linear_regression(inst, design_matrix, names=None):
 
 def _fit_lm(data, design_matrix, names):
     """Aux function."""
-    from scipy import stats, linalg
-
     n_samples = len(data)
     n_features = np.prod(data.shape[1:])
     if design_matrix.ndim != 2:
@@ -264,8 +263,6 @@ def linear_regression_raw(
     ----------
     .. footbibliography::
     """
-    from scipy import linalg
-
     if isinstance(solver, str):
         if solver not in {"cholesky"}:
             raise ValueError("No such solver: {}".format(solver))
@@ -352,8 +349,6 @@ def _prepare_rerp_preds(
     n_samples, sfreq, events, event_id=None, tmin=-0.1, tmax=1, covariates=None
 ):
     """Build predictor matrix and metadata (e.g. condition time windows)."""
-    from scipy import sparse
-
     conds = list(event_id)
     if covariates is not None:
         conds += list(covariates)
@@ -385,7 +380,7 @@ def _prepare_rerp_preds(
             ids = (
                 [event_id[cond]] if isinstance(event_id[cond], int) else event_id[cond]
             )
-            onsets = -(events[np.in1d(events[:, 2], ids), 0] + tmin_)
+            onsets = -(events[np.isin(events[:, 2], ids), 0] + tmin_)
             values = np.ones((len(onsets), n_lags))
 
         else:  # for predictors from covariates, e.g. continuous ones

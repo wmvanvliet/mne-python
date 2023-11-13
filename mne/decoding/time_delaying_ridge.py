@@ -5,12 +5,15 @@
 # License: BSD-3-Clause
 
 import numpy as np
+from scipy import linalg
+from scipy.signal import fftconvolve
+from scipy.sparse.csgraph import laplacian
 
-from .base import BaseEstimator
 from ..cuda import _setup_cuda_fft_multiply_repeated
 from ..filter import next_fast_len
 from ..fixes import jit
-from ..utils import warn, ProgressBar, logger, _validate_type, _check_option
+from ..utils import ProgressBar, _check_option, _validate_type, logger, warn
+from .base import BaseEstimator
 
 
 def _compute_corrs(
@@ -149,9 +152,6 @@ def _toeplitz_dot(a, b):
 
 def _compute_reg_neighbors(n_ch_x, n_delays, reg_type, method="direct", normed=False):
     """Compute regularization parameter from neighbors."""
-    from scipy import linalg
-    from scipy.sparse.csgraph import laplacian
-
     known_types = ("ridge", "laplacian")
     if isinstance(reg_type, str):
         reg_type = (reg_type,) * 2
@@ -206,8 +206,6 @@ def _compute_reg_neighbors(n_ch_x, n_delays, reg_type, method="direct", normed=F
 def _fit_corrs(x_xt, x_y, n_ch_x, reg_type, alpha, n_ch_in):
     """Fit the model using correlation matrices."""
     # do the regularized solving
-    from scipy import linalg
-
     n_ch_out = x_y.shape[1]
     assert x_y.shape[0] % n_ch_x == 0
     n_delays = x_y.shape[0] // n_ch_x
@@ -377,8 +375,6 @@ class TimeDelayingRidge(BaseEstimator):
         X : ndarray
             The predicted response.
         """
-        from scipy.signal import fftconvolve
-
         if X.ndim == 2:
             X = X[:, np.newaxis, :]
             singleton = True

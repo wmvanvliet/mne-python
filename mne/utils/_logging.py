@@ -4,19 +4,19 @@
 # License: BSD-3-Clause
 
 import contextlib
-from decorator import FunctionMaker
 import importlib
 import inspect
-from io import StringIO
-import re
-import sys
 import logging
 import os.path as op
+import re
+import sys
 import warnings
+from io import StringIO
 from typing import Any, Callable, TypeVar
 
-from .docs import fill_doc
+from decorator import FunctionMaker
 
+from .docs import fill_doc
 
 logger = logging.getLogger("mne")  # one selection here used across mne-python
 logger.propagate = False  # don't propagate (in case of multiple imports)
@@ -117,7 +117,7 @@ def %(name)s(%(signature)s):\n
     else:
         return _function_(%(shortsignature)s)"""
     evaldict = dict(_use_log_level_=use_log_level, _function_=function)
-    fm = FunctionMaker(function, None, None, None, None, function.__module__)
+    fm = FunctionMaker(function)
     attrs = dict(
         __wrapped__=function,
         __qualname__=function.__qualname__,
@@ -220,8 +220,8 @@ def set_log_level(verbose=None, return_old_level=False, add_frames=None):
 
 
 def _parse_verbose(verbose):
-    from .config import get_config
     from .check import _check_option, _validate_type
+    from .config import get_config
 
     _validate_type(verbose, (bool, str, int, None), "verbose")
     if verbose is None:

@@ -18,59 +18,63 @@
 #
 # License: BSD-3-Clause
 
+import copy
+import itertools
 from functools import partial
 
 import numpy as np
-import itertools
+from scipy.linalg import orth
+from scipy.optimize import fmin_cobyla
+from scipy.spatial.distance import cdist
 
-from .event import find_events
-from .io.base import BaseRaw
-from .channels.channels import _get_meg_system
-from .io.kit.constants import KIT
-from .io.kit.kit import RawKIT as _RawKIT
-from .io.meas_info import _simplify_info, Info
-from .io.pick import (
-    pick_types,
+from ._fiff.constants import FIFF
+from ._fiff.meas_info import Info, _simplify_info
+from ._fiff.pick import (
+    _picks_to_idx,
     pick_channels,
     pick_channels_regexp,
     pick_info,
-    _picks_to_idx,
+    pick_types,
 )
-from .io.proj import Projection, setup_proj
-from .io.constants import FIFF
-from .io.ctf.trans import _make_ctf_coord_trans_set
-from .forward import _magnetic_dipole_field_vec, _create_meg_coils, _concatenate_coils
-from .cov import make_ad_hoc_cov, compute_whitener
+from ._fiff.proj import Projection, setup_proj
+from .channels.channels import _get_meg_system
+from .cov import compute_whitener, make_ad_hoc_cov
 from .dipole import _make_guesses
+from .event import find_events
 from .fixes import jit
+from .forward import _concatenate_coils, _create_meg_coils, _magnetic_dipole_field_vec
+from .io import BaseRaw
+from .io.ctf.trans import _make_ctf_coord_trans_set
+from .io.kit.constants import KIT
+from .io.kit.kit import RawKIT as _RawKIT
 from .preprocessing.maxwell import (
-    _sss_basis,
+    _get_mf_picks_fix_mags,
     _prep_mf_coils,
     _regularize_out,
-    _get_mf_picks_fix_mags,
+    _sss_basis,
 )
 from .transforms import (
-    apply_trans,
-    invert_transform,
     _angle_between_quats,
-    quat_to_rot,
-    rot_to_quat,
     _fit_matched_points,
     _quat_to_affine,
     als_ras_trans,
+    apply_trans,
+    invert_transform,
+    quat_to_rot,
+    rot_to_quat,
 )
 from .utils import (
-    verbose,
+    ProgressBar,
+    _check_fname,
+    _check_option,
+    _on_missing,
+    _pl,
+    _validate_type,
+    _verbose_safe_false,
     logger,
     use_log_level,
-    _check_fname,
+    verbose,
     warn,
-    _validate_type,
-    ProgressBar,
-    _check_option,
-    _pl,
-    _on_missing,
-    _verbose_safe_false,
 )
 
 # Eventually we should add:
@@ -413,16 +417,21 @@ def _get_hpi_initial_fit(info, adjust=False, verbose=None):
         key=lambda x: x["ident"],
     )  # ascending (dig) order
     if len(hpi_dig) == 0:  # CTF data, probably
+        msg = "HPIFIT: No HPI dig points, using hpifit result"
         hpi_dig = sorted(hpi_result["dig_points"], key=lambda x: x["ident"])
         if all(
             d["coord_frame"] in (FIFF.FIFFV_COORD_DEVICE, FIFF.FIFFV_COORD_UNKNOWN)
             for d in hpi_dig
         ):
+            # Do not modify in place!
+            hpi_dig = copy.deepcopy(hpi_dig)
+            msg += " transformed to head coords"
             for dig in hpi_dig:
                 dig.update(
                     r=apply_trans(info["dev_head_t"], dig["r"]),
                     coord_frame=FIFF.FIFFV_COORD_HEAD,
                 )
+        logger.debug(msg)
 
     # zero-based indexing, dig->info
     # CTF does not populate some entries so we use .get here
@@ -532,8 +541,6 @@ def _magnetic_dipole_delta_multi(whitened_fwd_svd, B, B2):
 
 def _fit_magnetic_dipole(B_orig, x0, too_close, whitener, coils, guesses):
     """Fit a single bit of data (x0 = pos)."""
-    from scipy.optimize import fmin_cobyla
-
     B = np.dot(whitener, B_orig)
     B2 = np.dot(B, B)
     objective = partial(
@@ -616,6 +623,16 @@ def _setup_hpi_amplitude_fitting(
     # grab basic info.
     on_missing = "raise" if not allow_empty else "ignore"
     hpi_freqs, hpi_pick, hpi_ons = get_chpi_info(info, on_missing=on_missing)
+
+    # check for maxwell filtering
+    for ent in info["proc_history"]:
+        for key in ("sss_info", "max_st"):
+            if len(ent["max_info"]["sss_info"]) > 0:
+                warn(
+                    "Fitting cHPI amplitudes after Maxwell filtering may not work, "
+                    "consider fitting on the original data."
+                )
+                break
 
     _validate_type(t_window, (str, "numeric"), "t_window")
     if info["line_freq"] is not None:
@@ -710,8 +727,6 @@ def _reorder_inv_model(inv_model, n_freqs):
 
 
 def _setup_ext_proj(info, ext_order):
-    from scipy import linalg
-
     meg_picks = pick_types(info, meg=True, eeg=False, exclude="bads")
     info = pick_info(_simplify_info(info), meg_picks)  # makes a copy
     _, _, _, _, mag_or_fine = _get_mf_picks_fix_mags(
@@ -722,8 +737,8 @@ def _setup_ext_proj(info, ext_order):
         dict(origin=(0.0, 0.0, 0.0), int_order=0, ext_order=ext_order), mf_coils
     ).T
     out_removes = _regularize_out(0, 1, mag_or_fine, [])
-    ext = ext[~np.in1d(np.arange(len(ext)), out_removes)]
-    ext = linalg.orth(ext.T).T
+    ext = ext[~np.isin(np.arange(len(ext)), out_removes)]
+    ext = orth(ext.T).T
     assert ext.shape[1] == len(meg_picks)
     proj = Projection(
         kind=FIFF.FIFFV_PROJ_ITEM_HOMOG_FIELD,
@@ -1555,8 +1570,6 @@ def filter_chpi(
 
 def _compute_good_distances(hpi_coil_dists, new_pos, dist_limit=0.005):
     """Compute good coils based on distances."""
-    from scipy.spatial.distance import cdist
-
     these_dists = cdist(new_pos, new_pos)
     these_dists = np.abs(hpi_coil_dists - these_dists)
     # there is probably a better algorithm for finding the bad ones...

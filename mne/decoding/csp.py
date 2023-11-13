@@ -9,13 +9,15 @@
 import copy as cp
 
 import numpy as np
+from scipy.linalg import eigh
 
-from .base import BaseEstimator
-from .mixin import TransformerMixin
 from ..cov import _regularized_covariance
 from ..defaults import _BORDER_DEFAULT, _EXTRAPOLATE_DEFAULT, _INTERPOLATION_DEFAULT
+from ..evoked import EvokedArray
 from ..fixes import pinv
-from ..utils import fill_doc, _check_option, _validate_type, copy_doc
+from ..utils import _check_option, _validate_type, copy_doc, fill_doc
+from .base import BaseEstimator
+from .mixin import TransformerMixin
 
 
 @fill_doc
@@ -279,7 +281,7 @@ class CSP(TransformerMixin, BaseEstimator):
         name_format="CSP%01d",
         nrows=1,
         ncols="auto",
-        show=True
+        show=True,
     ):
         """Plot topographic patterns of components.
 
@@ -336,8 +338,6 @@ class CSP(TransformerMixin, BaseEstimator):
         fig : instance of matplotlib.figure.Figure
            The figure.
         """
-        from .. import EvokedArray
-
         if units is None:
             units = "AU"
         if components is None:
@@ -412,7 +412,7 @@ class CSP(TransformerMixin, BaseEstimator):
         name_format="CSP%01d",
         nrows=1,
         ncols="auto",
-        show=True
+        show=True,
     ):
         """Plot topographic filters of components.
 
@@ -469,8 +469,6 @@ class CSP(TransformerMixin, BaseEstimator):
         fig : instance of matplotlib.figure.Figure
            The figure.
         """
-        from .. import EvokedArray
-
         if units is None:
             units = "AU"
         if components is None:
@@ -565,11 +563,9 @@ class CSP(TransformerMixin, BaseEstimator):
         return cov, weight
 
     def _decompose_covs(self, covs, sample_weights):
-        from scipy import linalg
-
         n_classes = len(covs)
         if n_classes == 2:
-            eigen_values, eigen_vectors = linalg.eigh(covs[0], covs.sum(0))
+            eigen_values, eigen_vectors = eigh(covs[0], covs.sum(0))
         else:
             # The multiclass case is adapted from
             # http://github.com/alexandrebarachant/pyRiemann
@@ -807,8 +803,6 @@ class SPoC(CSP):
         self : instance of SPoC
             Returns the modified instance.
         """
-        from scipy import linalg
-
         self._check_Xy(X, y)
 
         if len(np.unique(y)) < 2:
@@ -837,7 +831,7 @@ class SPoC(CSP):
         Cz = np.mean(covs * target[:, np.newaxis, np.newaxis], axis=0)
 
         # solve eigenvalue decomposition
-        evals, evecs = linalg.eigh(Cz, C)
+        evals, evecs = eigh(Cz, C)
         evals = evals.real
         evecs = evecs.real
         # sort vectors
@@ -847,7 +841,7 @@ class SPoC(CSP):
         evecs = evecs[:, ix].T
 
         # spatial patterns
-        self.patterns_ = linalg.pinv(evecs).T  # n_channels x n_channels
+        self.patterns_ = pinv(evecs).T  # n_channels x n_channels
         self.filters_ = evecs  # n_channels x n_channels
 
         pick_filters = self.filters_[: self.n_components]

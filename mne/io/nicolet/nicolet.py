@@ -2,16 +2,17 @@
 #
 # License: BSD-3-Clause
 
-import numpy as np
-from os import path
-import datetime
 import calendar
+import datetime
+from os import path
 
-from ...utils import logger, fill_doc
-from ..utils import _read_segments_file, _find_channels, _create_chs
+import numpy as np
+
+from ..._fiff.constants import FIFF
+from ..._fiff.meas_info import _empty_info
+from ..._fiff.utils import _create_chs, _find_channels, _read_segments_file
+from ...utils import fill_doc, logger
 from ..base import BaseRaw
-from ..meas_info import _empty_info
-from ..constants import FIFF
 
 
 @fill_doc

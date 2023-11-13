@@ -8,8 +8,16 @@ import logging
 import multiprocessing
 import os
 
-from . import get_config
-from .utils import logger, verbose, warn, ProgressBar, _validate_type, _ensure_int
+from .utils import (
+    ProgressBar,
+    _ensure_int,
+    _validate_type,
+    get_config,
+    logger,
+    use_log_level,
+    verbose,
+    warn,
+)
 
 
 @verbose
@@ -113,7 +121,12 @@ def parallel_func(
         logger.debug(f"Got {n_jobs} parallel jobs after requesting {n_jobs_orig}")
         if max_jobs is not None:
             n_jobs = min(n_jobs, max(_ensure_int(max_jobs, "max_jobs"), 1))
-        my_func = delayed(func)
+
+        def run_verbose(*args, verbose=logger.level, **kwargs):
+            with use_log_level(verbose=verbose):
+                return func(*args, **kwargs)
+
+        my_func = delayed(run_verbose)
 
     if total is not None:
 

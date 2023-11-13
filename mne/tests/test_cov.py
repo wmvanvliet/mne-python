@@ -8,49 +8,49 @@ import sys
 from inspect import signature
 from pathlib import Path
 
+import numpy as np
+import pytest
 from numpy.testing import (
+    assert_allclose,
     assert_array_almost_equal,
     assert_array_equal,
     assert_equal,
-    assert_allclose,
-)
-import pytest
-import numpy as np
-
-from mne.cov import (
-    regularize,
-    whiten_evoked,
-    _auto_low_rank_model,
-    prepare_noise_cov,
-    compute_whitener,
-    _regularized_covariance,
 )
 
 from mne import (
-    read_cov,
-    write_cov,
     Epochs,
-    merge_events,
-    find_events,
-    compute_raw_covariance,
     compute_covariance,
-    read_evokeds,
     compute_proj_raw,
-    pick_channels_cov,
-    pick_types,
+    compute_rank,
+    compute_raw_covariance,
+    create_info,
+    find_events,
     make_ad_hoc_cov,
     make_fixed_length_events,
-    create_info,
-    compute_rank,
+    merge_events,
+    pick_channels_cov,
+    pick_info,
+    pick_types,
+    read_cov,
+    read_evokeds,
+    write_cov,
 )
+from mne._fiff.pick import _DATA_CH_TYPES_SPLIT
 from mne.channels import equalize_channels
+from mne.cov import (
+    _auto_low_rank_model,
+    _regularized_covariance,
+    compute_whitener,
+    prepare_noise_cov,
+    regularize,
+    whiten_evoked,
+)
 from mne.datasets import testing
 from mne.fixes import _safe_svd
-from mne.io import read_raw_fif, RawArray, read_raw_ctf, read_info
-from mne.io.pick import _DATA_CH_TYPES_SPLIT, pick_info
+from mne.io import RawArray, read_info, read_raw_ctf, read_raw_fif
 from mne.preprocessing import maxwell_filter
 from mne.rank import _compute_rank_int
-from mne.utils import catch_logging, assert_snr, _record_warnings
+from mne.utils import _record_warnings, assert_snr, catch_logging
 
 base_dir = Path(__file__).parent.parent / "io" / "tests" / "data"
 cov_fname = base_dir / "test-cov.fif"
@@ -68,7 +68,7 @@ ctf_fname = testing.data_path(download=False) / "CTF" / "testdata_ctf.ds"
 def test_compute_whitener(proj, pca):
     """Test properties of compute_whitener."""
     raw = read_raw_fif(raw_fname).crop(0, 3).load_data()
-    raw.pick_types(meg=True, eeg=True, exclude=())
+    raw.pick(picks=["meg", "eeg"])
     if proj:
         raw.apply_proj()
     else:
@@ -122,7 +122,7 @@ def test_cov_mismatch():
     """Test estimation with MEG<->Head mismatch."""
     raw = read_raw_fif(raw_fname).crop(0, 5).load_data()
     events = find_events(raw, stim_channel="STI 014")
-    raw.pick_channels(raw.ch_names[:5])
+    raw.pick(raw.ch_names[:5])
     raw.add_proj([], remove_existing=True)
     epochs = Epochs(raw, events, None, tmin=-0.2, tmax=0.0, preload=True)
     for kind in ("shift", "None"):
@@ -250,6 +250,8 @@ def test_io_cov(tmp_path):
     assert_equal(cov["method"], cov2["method"])
     assert_equal(cov["loglik"], cov2["loglik"])
     assert "Covariance" in repr(cov)
+    assert "range :" in repr(cov)
+    assert "\n" not in repr(cov)
 
     cov2 = read_cov(cov_gz_fname)
     assert_array_almost_equal(cov.data, cov2.data)
@@ -308,7 +310,7 @@ def test_cov_estimation_on_raw(method, tmp_path):
     assert_snr(cov.data, cov_mne.data, 1e6)
 
     # test equivalence with np.cov
-    cov_np = np.cov(raw.copy().pick_channels(cov["names"]).get_data(), ddof=1)
+    cov_np = np.cov(raw.copy().pick(cov["names"]).get_data(), ddof=1)
     if method != "shrunk":  # can check all
         off_diag = np.triu_indices(cov_np.shape[0])
     else:
@@ -336,7 +338,7 @@ def test_cov_estimation_on_raw(method, tmp_path):
     assert_array_almost_equal(cov.data, cov_read.data)
 
     # test with a subset of channels
-    raw_pick = raw.copy().pick_channels(raw.ch_names[:5])
+    raw_pick = raw.copy().pick(raw.ch_names[:5])
     raw_pick.info.normalize_proj()
     cov = compute_raw_covariance(
         raw_pick, tstep=None, method=method, rank="full", method_params=method_params
@@ -640,7 +642,7 @@ def test_compute_covariance_auto_reg(rank):
     events_merged = merge_events(events, event_ids, 1234)
     # we need a few channels for numerical reasons in PCA/FA
     picks = pick_types(raw.info, meg="mag", eeg=False)[:10]
-    raw.pick_channels([raw.ch_names[pick] for pick in picks])
+    raw.pick([raw.ch_names[pick] for pick in picks])
     raw.info.normalize_proj()
     epochs = Epochs(
         raw,
@@ -827,7 +829,7 @@ def test_low_rank_cov(raw_epochs_events):
     del reg_r_only_cov, reg_r_cov
 
     # test that rank=306 is same as rank='full'
-    epochs_meg = epochs.copy().pick_types(meg=True)
+    epochs_meg = epochs.copy().pick("meg")
     assert len(epochs_meg.ch_names) == 306
     with epochs_meg.info._unlock():
         epochs_meg.info.update(bads=[], projs=[])
@@ -846,7 +848,7 @@ def test_low_rank_cov(raw_epochs_events):
     assert_allclose(cov_full["data"], cov_dict["data"])
 
     # Work with just EEG data to simplify projection / rank reduction
-    raw = raw.copy().pick_types(meg=False, eeg=True)
+    raw = raw.copy().pick("eeg")
     n_proj = 2
     raw.add_proj(compute_proj_raw(raw, n_eeg=n_proj))
     n_ch = len(raw.ch_names)
@@ -865,7 +867,7 @@ def test_low_rank_cov(raw_epochs_events):
     )
     assert _cov_rank(dia_cov, epochs.info) == rank
     assert_allclose(dia_cov["data"], reg_cov["data"])
-    epochs.pick_channels(epochs.ch_names[:103])
+    epochs.pick(epochs.ch_names[:103])
     # degenerate
     with pytest.raises(ValueError, match='can.*only be used with rank="full"'):
         compute_covariance(epochs, rank=None, method="pca")

@@ -133,7 +133,7 @@ fig = evks["aud/left"].plot_topomap(
 # the estimated magnitude and direction of the magnetic field, using the
 # function :func:`mne.viz.plot_arrowmap`:
 
-mags = evks["aud/left"].copy().pick_types(meg="mag")
+mags = evks["aud/left"].copy().pick(picks="mag")
 mne.viz.plot_arrowmap(mags.data[:, 175], mags.info, extrapolate="local")
 
 # %%
@@ -279,7 +279,7 @@ mne.viz.plot_evoked_topo(evokeds_list)
 # compute 3D field maps without a ``trans`` file, but it will only work for
 # calculating the field *on the MEG helmet from the MEG sensors*.
 
-subjects_dir = root.parent.parent / "subjects"
+subjects_dir = root.parents[1] / "subjects"
 trans_file = root / "sample_audvis_raw-trans.fif"
 
 # %%

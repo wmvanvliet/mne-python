@@ -5,30 +5,30 @@
 # License: BSD-3-Clause
 
 import os.path as op
-import numpy as np
 from gzip import GzipFile
 from pathlib import Path
 
-from .bem import _bem_find_surface, read_bem_surfaces
-from .io.constants import FIFF
-from .io.meas_info import read_fiducials
+import numpy as np
+
+from ._fiff.constants import FIFF
+from ._fiff.meas_info import read_fiducials
+from .surface import _read_mri_surface, read_surface
 from .transforms import (
-    apply_trans,
-    invert_transform,
-    combine_transforms,
-    _ensure_trans,
-    read_ras_mni_t,
     Transform,
+    _ensure_trans,
+    apply_trans,
+    combine_transforms,
+    invert_transform,
+    read_ras_mni_t,
 )
-from .surface import read_surface, _read_mri_surface
 from .utils import (
-    verbose,
-    _validate_type,
     _check_fname,
     _check_option,
-    get_subjects_dir,
     _import_nibabel,
+    _validate_type,
+    get_subjects_dir,
     logger,
+    verbose,
 )
 
 
@@ -250,7 +250,7 @@ def get_volume_labels_from_aseg(mgz_fname, return_colors=False, atlas_ids=None):
     elif return_colors:
         raise ValueError("return_colors must be False if atlas_ids are " "provided")
     # restrict to the ones in the MRI, sorted by label name
-    keep = np.in1d(list(atlas_ids.values()), want)
+    keep = np.isin(list(atlas_ids.values()), want)
     keys = sorted(
         (key for ki, key in enumerate(atlas_ids.keys()) if keep[ki]),
         key=lambda x: atlas_ids[x],
@@ -491,7 +491,7 @@ def estimate_head_mri_t(subject, subjects_dir=None, verbose=None):
     -------
     %(trans_not_none)s
     """
-    from .channels.montage import make_dig_montage, compute_native_head_t
+    from .channels.montage import compute_native_head_t, make_dig_montage
 
     subjects_dir = get_subjects_dir(subjects_dir, raise_error=True)
     lpa, nasion, rpa = get_mni_fiducials(subject, subjects_dir)
@@ -756,6 +756,8 @@ def _get_head_surface(surf, subject, subjects_dir, bem=None, verbose=None):
     -----
     .. versionadded: 0.24
     """
+    from .bem import _bem_find_surface, read_bem_surfaces
+
     _check_option("surf", surf, ("auto", "head", "outer_skin", "head-dense", "seghead"))
     if surf in ("auto", "head", "outer_skin"):
         if bem is not None:
@@ -827,6 +829,8 @@ def _get_skull_surface(surf, subject, subjects_dir, bem=None, verbose=None):
     -----
     .. versionadded: 0.24
     """
+    from .bem import _bem_find_surface
+
     if bem is not None:
         try:
             return _bem_find_surface(bem, surf + "_skull")
@@ -847,7 +851,7 @@ def _get_skull_surface(surf, subject, subjects_dir, bem=None, verbose=None):
 
 
 def _estimate_talxfm_rigid(subject, subjects_dir):
-    from .coreg import fit_matched_points, _trans_from_params
+    from .coreg import _trans_from_params, fit_matched_points
 
     xfm = read_talxfm(subject, subjects_dir)
     # XYZ+origin + halfway

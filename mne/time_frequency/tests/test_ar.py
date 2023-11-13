@@ -1,13 +1,12 @@
 from pathlib import Path
 
-import pytest
 import numpy as np
-from numpy.testing import assert_array_almost_equal, assert_allclose
+import pytest
+from numpy.testing import assert_allclose, assert_array_almost_equal
 from scipy.signal import lfilter
 
 from mne import io
 from mne.time_frequency.ar import _yule_walker, fit_iir_model_raw
-
 
 raw_fname = (
     Path(__file__).parent.parent.parent / "io" / "tests" / "data" / "test_raw.fif"
@@ -30,7 +29,7 @@ def test_yule_walker():
 def test_ar_raw():
     """Test fitting AR model on raw data."""
     raw = io.read_raw_fif(raw_fname).crop(0, 2).load_data()
-    raw.pick_types(meg="grad")
+    raw.pick(picks="grad")
     # pick MEG gradiometers
     for order in (2, 5, 10):
         coeffs = fit_iir_model_raw(raw, order)[1][1:]

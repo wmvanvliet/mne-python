@@ -6,11 +6,10 @@
 
 import numpy as np
 
+from ..._fiff.constants import FIFF
 from ...utils import logger
-from .res4 import _make_ctf_name
 from .constants import CTF
-from ..constants import FIFF
-
+from .res4 import _make_ctf_name
 
 _kind_dict = {
     "nasion": CTF.CTFV_COIL_NAS,

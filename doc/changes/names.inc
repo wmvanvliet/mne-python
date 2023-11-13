@@ -34,6 +34,8 @@
 
 .. _Andrew Dykstra: https://github.com/adykstra
 
+.. _Andrew Gilbert: https://github.com/adgilbert
+
 .. _Andrew Quinn: https://github.com/ajquinn
 
 .. _Aniket Pradhan: https://github.com/Aniket-Pradhan
@@ -182,6 +184,8 @@
 
 .. _George O'Neill: https://georgeoneill.github.io
 
+.. _Gonzalo Reina: https://github.com/Gon-reina
+
 .. _Guillaume Dumas: https://mila.quebec/en/person/guillaume-dumas
 
 .. _Guillaume Favelier: https://github.com/GuillaumeFavelier
@@ -207,6 +211,8 @@
 .. _Hyonyoung Shin: https://github.com/mcvain
 
 .. _Ilias Machairas: https://github.com/JungleHippo
+
+.. _Ivan Zubarev: https://github.com/zubara
 
 .. _Ivana Kojcic: https://github.com/ikojcic
 
@@ -318,6 +324,8 @@
 
 .. _Mainak Jas: https://jasmainak.github.io
 
+.. _Maksym Balatsko: https://github.com/mbalatsko
+
 .. _Marcin Koculak: https://github.com/mkoculak
 
 .. _Marian Dovgialo: https://github.com/mdovgialo
@@ -398,6 +406,8 @@
 
 .. _Pablo-Arias: https://github.com/Pablo-Arias
 
+.. _Pablo Mainar: https://github.com/pablomainar
+
 .. _Padma Sundaram: https://www.nmr.mgh.harvard.edu/user/8071
 
 .. _Paul Pasler: https://github.com/ppasler
@@ -416,6 +426,8 @@
 
 .. _Proloy Das: https://github.com/proloyd
 
+.. _Qian Chu: https://github.com/qian-chu
+
 .. _Qianliang Li: https://www.dtu.dk/english/service/phonebook/person?id=126774
 
 .. _Quentin Barthélemy: https://github.com/qbarthelemy
@@ -431,6 +443,8 @@
 .. _Ramiro Gatti: https://github.com/ragatti
 
 .. _ramonapariciog: https://github.com/ramonapariciog
+
+.. _Rasmus Aagaard: https://github.com/rasgaard
 
 .. _Rasmus Zetter: https://people.aalto.fi/rasmus.zetter
 

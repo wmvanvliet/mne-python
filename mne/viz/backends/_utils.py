@@ -5,18 +5,22 @@
 #          Guillaume Favelier <guillaume.favelier@gmail.com>
 #
 # License: Simplified BSD
-from ctypes import cdll, c_void_p, c_char_p
 import collections.abc
-from colorsys import rgb_to_hls
-from contextlib import contextmanager
 import functools
 import os
 import platform
 import signal
 import sys
-
+from colorsys import rgb_to_hls
+from contextlib import contextmanager
+from ctypes import c_char_p, c_void_p, cdll
 from pathlib import Path
+
 import numpy as np
+
+from ...fixes import _compare_version
+from ...utils import _check_qt_version, _validate_type, logger, warn
+from ..utils import _get_cmap
 
 VALID_BROWSE_BACKENDS = (
     "qt",
@@ -33,7 +37,6 @@ ALLOWED_QUIVER_MODES = ("2darrow", "arrow", "cone", "cylinder", "sphere", "oct")
 def _get_colormap_from_array(
     colormap=None, normalized_colormap=False, default_colormap="coolwarm"
 ):
-    from ..utils import _get_cmap
     from matplotlib.colors import ListedColormap
 
     if colormap is None:
@@ -86,7 +89,7 @@ def _alpha_blend_background(ctable, background_color):
 def _qt_init_icons():
     from qtpy.QtGui import QIcon
 
-    icons_path = f"{Path(__file__).parent.parent.parent}/icons"
+    icons_path = str(Path(__file__).parents[2] / "icons")
     QIcon.setThemeSearchPaths([icons_path])
     return icons_path
 
@@ -128,10 +131,8 @@ def _init_mne_qtapp(enable_icon=True, pg_app=False, splash=False):
         string.
     """
     from qtpy.QtCore import Qt
-    from qtpy.QtGui import QIcon, QPixmap, QGuiApplication
+    from qtpy.QtGui import QGuiApplication, QIcon, QPixmap
     from qtpy.QtWidgets import QApplication, QSplashScreen
-    from ...fixes import _compare_version
-    from ...utils import _check_qt_version
 
     app_name = "MNE-Python"
     organization_name = "MNE"
@@ -253,8 +254,6 @@ def _qt_app_exec(app):
 
 
 def _qt_detect_theme():
-    from ..utils import logger
-
     try:
         import darkdetect
 
@@ -272,9 +271,6 @@ def _qt_detect_theme():
 
 
 def _qt_get_stylesheet(theme):
-    from ...fixes import _compare_version
-    from ...utils import logger, warn, _validate_type, _check_qt_version
-
     _validate_type(theme, ("path-like",), "theme")
     theme = str(theme)
     orig_theme = theme

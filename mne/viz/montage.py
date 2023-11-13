@@ -1,9 +1,13 @@
 """Functions to plot EEG sensor montages or digitizer montages."""
 from copy import deepcopy
+
 import numpy as np
-from ..utils import logger, _check_option, _validate_type, verbose
-from . import plot_sensors
-from ..io._digitization import _get_fid_coords
+from scipy.spatial.distance import cdist
+
+from .._fiff._digitization import _get_fid_coords
+from .._fiff.meas_info import create_info
+from ..utils import _check_option, _validate_type, logger, verbose
+from .utils import plot_sensors
 
 
 @verbose
@@ -16,7 +20,7 @@ def plot_montage(
     sphere=None,
     *,
     axes=None,
-    verbose=None
+    verbose=None,
 ):
     """Plot a montage.
 
@@ -44,9 +48,7 @@ def plot_montage(
     fig : instance of matplotlib.figure.Figure
         The figure object.
     """
-    from scipy.spatial.distance import cdist
     from ..channels import DigMontage, make_dig_montage
-    from .. import create_info
 
     _check_option("kind", kind, ["topomap", "3d"])
     _validate_type(montage, DigMontage, item_name="montage")

@@ -21,7 +21,7 @@ from mne.utils import _check_option
 
 def run():
     """Run command."""
-    from mne.commands.utils import get_optparser, _add_verbose_flag
+    from mne.commands.utils import _add_verbose_flag, get_optparser
 
     parser = get_optparser(__file__)
 
@@ -93,8 +93,7 @@ def run():
         "--add-dist",
         dest="add_dist",
         help='Add distances. Can be "True", "False", or "patch" '
-        "to only compute cortical patch statistics (like the "
-        "--cps option in MNE-C; requires SciPy >= 1.3)",
+        "to only compute cortical patch statistics (like the --cps option in MNE-C)",
         default="True",
     )
     parser.add_option(

@@ -56,7 +56,7 @@ raw = mne.io.read_raw_fif(raw_fname, preload=True)
 
 events = mne.find_events(raw)
 
-raw.pick_types(meg=False, stim=False, eog=False, eeg=True)
+raw.pick(picks="eeg")
 
 # %%
 # Here we merge visual and auditory events from both hemispheres, and make our
@@ -141,8 +141,8 @@ vis_predictor = epochs.events[:, 2] == epochs.event_id["visual"]
 baseline_predictor = (
     epochs.copy()
     .crop(*baseline)
-    .pick_channels([ch])
-    .get_data()  # convert to NumPy array
+    .pick([ch])
+    .get_data(copy=False)  # convert to NumPy array
     .mean(axis=-1)  # average across timepoints
     .squeeze()  # only 1 channel, so remove singleton dimension
 )

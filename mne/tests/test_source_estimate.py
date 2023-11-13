@@ -9,76 +9,75 @@ from pathlib import Path
 from shutil import copyfile
 
 import numpy as np
+import pytest
 from numpy.fft import fft
 from numpy.testing import (
+    assert_allclose,
     assert_array_almost_equal,
     assert_array_equal,
-    assert_allclose,
-    assert_equal,
     assert_array_less,
+    assert_equal,
 )
-import pytest
 from scipy import sparse
 from scipy.optimize import fmin_cobyla
 from scipy.spatial.distance import cdist
 
 import mne
 from mne import (
-    stats,
+    Epochs,
+    EvokedArray,
+    Label,
+    MixedSourceEstimate,
+    MixedVectorSourceEstimate,
     SourceEstimate,
+    SourceSpaces,
     VectorSourceEstimate,
     VolSourceEstimate,
-    Label,
-    read_source_spaces,
-    read_evokeds,
-    MixedSourceEstimate,
-    find_events,
-    Epochs,
-    read_source_estimate,
+    VolVectorSourceEstimate,
+    compute_source_morph,
+    convert_forward_solution,
     extract_label_time_course,
-    spatio_temporal_tris_adjacency,
-    stc_near_sensors,
-    spatio_temporal_src_adjacency,
+    find_events,
+    labels_to_stc,
+    pick_info,
+    pick_types,
+    pick_types_forward,
     read_cov,
-    EvokedArray,
-    spatial_inter_hemi_adjacency,
+    read_evokeds,
     read_forward_solution,
+    read_source_estimate,
+    read_source_spaces,
+    read_trans,
+    scale_mri,
+    setup_volume_source_space,
+    spatial_inter_hemi_adjacency,
     spatial_src_adjacency,
     spatial_tris_adjacency,
-    pick_info,
-    SourceSpaces,
-    VolVectorSourceEstimate,
-    read_trans,
-    pick_types,
-    MixedVectorSourceEstimate,
-    setup_volume_source_space,
-    convert_forward_solution,
-    pick_types_forward,
-    compute_source_morph,
-    labels_to_stc,
-    scale_mri,
+    spatio_temporal_src_adjacency,
+    spatio_temporal_tris_adjacency,
+    stats,
+    stc_near_sensors,
     write_source_spaces,
 )
+from mne._fiff.constants import FIFF
 from mne.datasets import testing
 from mne.fixes import _get_img_fdata
-from mne.io import read_info
-from mne.io.constants import FIFF
-from mne.morph_map import _make_morph_map_hemi
-from mne.source_estimate import grade_to_tris, _get_vol_mask
-from mne.source_space import _get_src_nn
-from mne.transforms import apply_trans, invert_transform, transform_surface_to
+from mne.io import read_info, read_raw_fif
+from mne.label import label_sign_flip, read_labels_from_annot
 from mne.minimum_norm import (
-    read_inverse_operator,
     apply_inverse,
     apply_inverse_epochs,
     make_inverse_operator,
+    read_inverse_operator,
 )
-from mne.label import read_labels_from_annot, label_sign_flip
+from mne.morph_map import _make_morph_map_hemi
+from mne.source_estimate import _get_vol_mask, grade_to_tris
+from mne.source_space._source_space import _get_src_nn
+from mne.transforms import apply_trans, invert_transform, transform_surface_to
 from mne.utils import (
-    catch_logging,
     _record_warnings,
+    catch_logging,
 )
-from mne.io import read_raw_fif
 
 data_path = testing.data_path(download=False)
 subjects_dir = data_path / "subjects"
@@ -173,7 +172,7 @@ def test_spatial_inter_hemi_adjacency():
         use_labels = [
             label.name[:-3]
             for label in labels
-            if np.in1d(label.vertices, has_neighbors).any()
+            if np.isin(label.vertices, has_neighbors).any()
         ]
         assert set(use_labels) - set(good_labels) == set()
 
@@ -405,13 +404,13 @@ def test_stc_attributes():
 
     # Changing .tmin or .tstep re-computes .times
     stc.tmin = 1
-    assert type(stc.tmin) == float
+    assert isinstance(stc.tmin, float)
     assert_array_almost_equal(
         stc.times, [1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9]
     )
 
     stc.tstep = 1
-    assert type(stc.tstep) == float
+    assert isinstance(stc.tstep, float)
     assert_array_almost_equal(
         stc.times, [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]
     )
@@ -678,11 +677,23 @@ def test_extract_label_time_course(kind, vector):
 
     label_tcs = dict(mean=np.arange(n_labels)[:, None] * np.ones((n_labels, n_times)))
     label_tcs["max"] = label_tcs["mean"]
+    label_tcs[None] = label_tcs["mean"]
 
     # compute the mean with sign flip
     label_tcs["mean_flip"] = np.zeros_like(label_tcs["mean"])
     for i, label in enumerate(labels):
         label_tcs["mean_flip"][i] = i * np.mean(label_sign_flip(label, src[:2]))
+
+    # compute pca_flip
+    label_flip = []
+    for i, label in enumerate(labels):
+        this_flip = i * label_sign_flip(label, src[:2])
+        label_flip.append(this_flip)
+    # compute pca_flip
+    label_tcs["pca_flip"] = np.zeros_like(label_tcs["mean"])
+    for i, (label, flip) in enumerate(zip(labels, label_flip)):
+        sign = np.sign(np.dot(np.full((flip.shape[0]), i), flip))
+        label_tcs["pca_flip"][i] = sign * label_tcs["mean"][i]
 
     # generate some stc's with known data
     stcs = list()
@@ -734,7 +745,7 @@ def test_extract_label_time_course(kind, vector):
             assert_array_equal(arr[1:], vol_means_t)
 
     # test the different modes
-    modes = ["mean", "mean_flip", "pca_flip", "max", "auto"]
+    modes = ["mean", "mean_flip", "pca_flip", "max", "auto", None]
 
     for mode in modes:
         if vector and mode not in ("mean", "max", "auto"):
@@ -748,18 +759,36 @@ def test_extract_label_time_course(kind, vector):
         ]
         assert len(label_tc) == n_stcs
         assert len(label_tc_method) == n_stcs
-        for tc1, tc2 in zip(label_tc, label_tc_method):
-            assert tc1.shape == (n_labels + len(vol_means),) + end_shape
-            assert tc2.shape == (n_labels + len(vol_means),) + end_shape
-            assert_allclose(tc1, tc2, rtol=1e-8, atol=1e-16)
+        for j, (tc1, tc2) in enumerate(zip(label_tc, label_tc_method)):
+            if mode is None:
+                assert all(arr.shape[1] == tc1[0].shape[1] for arr in tc1)
+                assert all(arr.shape[1] == tc2[0].shape[1] for arr in tc2)
+                assert (len(tc1), tc1[0].shape[1]) == (n_labels,) + end_shape
+                assert (len(tc2), tc2[0].shape[1]) == (n_labels,) + end_shape
+                for arr1, arr2 in zip(tc1, tc2):  # list of arrays
+                    assert_allclose(arr1, arr2, rtol=1e-8, atol=1e-16)
+            else:
+                assert tc1.shape == (n_labels + len(vol_means),) + end_shape
+                assert tc2.shape == (n_labels + len(vol_means),) + end_shape
+                assert_allclose(tc1, tc2, rtol=1e-8, atol=1e-16)
             if mode == "auto":
                 use_mode = "mean" if vector else "mean_flip"
             else:
                 use_mode = mode
-            # XXX we don't check pca_flip, probably should someday...
-            if use_mode in ("mean", "max", "mean_flip"):
+            if mode == "pca_flip":
+                for arr1, arr2 in zip(tc1, label_tcs[use_mode]):
+                    assert_array_almost_equal(arr1, arr2)
+            elif use_mode is None:
+                for arr1, arr2 in zip(
+                    tc1[:n_labels], label_tcs[use_mode]
+                ):  # list of arrays
+                    assert_allclose(
+                        arr1, np.tile(arr2, (arr1.shape[0], 1)), rtol=1e-8, atol=1e-16
+                    )
+            elif use_mode in ("mean", "max", "mean_flip"):
                 assert_array_almost_equal(tc1[:n_labels], label_tcs[use_mode])
-            assert_array_almost_equal(tc1[n_labels:], vol_means_t)
+            if mode is not None:
+                assert_array_almost_equal(tc1[n_labels:], vol_means_t)
 
     # test label with very few vertices (check SVD conditionals)
     label = Label(vertices=src[0]["vertno"][:2], hemi="lh")
@@ -837,7 +866,7 @@ def test_extract_label_time_course_volume(
     assert sum(s["nuse"] for s in src_labels) == 4157
     assert_array_equal(src_labels[-1]["vertno"], [8011, 8032, 8557])
     assert_array_equal(
-        np.where(np.in1d(src[0]["vertno"], [8011, 8032, 8557]))[0], [2672, 2688, 2995]
+        np.where(np.isin(src[0]["vertno"], [8011, 8032, 8557]))[0], [2672, 2688, 2995]
     )
     # triage "labels" argument
     if mri_res:
@@ -908,7 +937,7 @@ def test_extract_label_time_course_volume(
             rtol = 0.0
         for si, s in enumerate(src_labels):
             func = dict(mean=np.mean, max=np.max)[mode]
-            these = vertex_values[np.in1d(src[0]["vertno"], s["vertno"])]
+            these = vertex_values[np.isin(src[0]["vertno"], s["vertno"])]
             assert len(these) == s["nuse"]
             if si == 0 and s["seg_name"] == "Unknown":
                 continue  # unknown is crappy
@@ -1174,7 +1203,7 @@ def test_to_data_frame_index(index):
     # test that non-indexed data were present as columns
     non_index = list(set(["time", "subject"]) - set(index))
     if len(non_index):
-        assert all(np.in1d(non_index, df.columns))
+        assert all(np.isin(non_index, df.columns))
 
 
 @pytest.mark.parametrize("kind", ("surface", "mixed", "volume"))

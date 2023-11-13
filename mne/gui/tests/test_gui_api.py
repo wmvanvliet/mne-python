@@ -2,24 +2,21 @@
 #
 # License: Simplified BSD
 
-import sys
 import pytest
 
 from mne.utils import _check_qt_version
 
 # These will skip all tests in this scope
-pytestmark = pytest.mark.skipif(
-    sys.platform.startswith("win"), reason="nbexec does not work on Windows"
-)
 pytest.importorskip("nibabel")
 
 
 def test_gui_api(renderer_notebook, nbexec, *, n_warn=0, backend="qt"):
     """Test GUI API."""
     import contextlib
-    import mne
-    import warnings
     import sys
+    import warnings
+
+    import mne
 
     try:
         # Function

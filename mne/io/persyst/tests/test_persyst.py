@@ -5,9 +5,9 @@
 import os
 import shutil
 
+import numpy as np
 import pytest
 from numpy.testing import assert_array_equal
-import numpy as np
 
 from mne.datasets.testing import data_path, requires_testing_data
 from mne.io import read_raw_persyst
@@ -37,7 +37,7 @@ def test_persyst_lay_load():
     assert raw.preload is True
 
     # defaults channels to EEG
-    raw = raw.pick_types(eeg=True)
+    raw = raw.pick("eeg")
     assert len(raw.ch_names) == 83
 
     # no "-Ref" in channel names
@@ -53,7 +53,7 @@ def test_persyst_raw():
     raw = read_raw_persyst(fname_lay, preload=False)
 
     # defaults channels to EEG
-    raw = raw.pick_types(eeg=True)
+    raw = raw.pick("eeg")
 
     # get data
     data, times = raw.get_data(start=200, return_times=True)

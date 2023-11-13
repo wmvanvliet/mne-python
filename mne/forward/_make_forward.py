@@ -8,42 +8,41 @@
 # The computations in this code were primarily derived from Matti Hämäläinen's
 # C code.
 
-from copy import deepcopy
-from contextlib import contextmanager
-from pathlib import Path
 import os
 import os.path as op
+from contextlib import contextmanager
+from copy import deepcopy
+from pathlib import Path
 
 import numpy as np
 
-from ._compute_forward import _compute_forwards
-from ..io import read_info, _loc_to_coil_trans, _loc_to_eeg_loc, Info
-from ..io.compensator import get_current_comp, make_compensator
-from ..io.pick import _has_kit_refs, pick_types, pick_info
-from ..io.constants import FIFF, FWD
-from ..transforms import (
-    _ensure_trans,
-    transform_surface_to,
-    apply_trans,
-    _get_trans,
-    _print_coord_trans,
-    _coord_frame_name,
-    Transform,
-    invert_transform,
-)
-from ..utils import logger, verbose, warn, _pl, _validate_type, _check_fname
-from ..source_space import (
+from .._fiff.compensator import get_current_comp, make_compensator
+from .._fiff.constants import FIFF, FWD
+from .._fiff.meas_info import Info, read_info
+from .._fiff.pick import _has_kit_refs, pick_info, pick_types
+from .._fiff.tag import _loc_to_coil_trans, _loc_to_eeg_loc
+from ..bem import ConductorModel, _bem_find_surface, read_bem_solution
+from ..source_estimate import VolSourceEstimate
+from ..source_space._source_space import (
+    _complete_vol_src,
     _ensure_src,
     _filter_source_spaces,
     _make_discrete_source_space,
-    _complete_vol_src,
 )
-from ..source_estimate import VolSourceEstimate
-from ..surface import _normalize_vectors, _CheckInside
-from ..bem import read_bem_solution, _bem_find_surface, ConductorModel
-
-from .forward import Forward, _merge_fwds, convert_forward_solution, _FWD_ORDER
-
+from ..surface import _CheckInside, _normalize_vectors
+from ..transforms import (
+    Transform,
+    _coord_frame_name,
+    _ensure_trans,
+    _get_trans,
+    _print_coord_trans,
+    apply_trans,
+    invert_transform,
+    transform_surface_to,
+)
+from ..utils import _check_fname, _pl, _validate_type, logger, verbose, warn
+from ._compute_forward import _compute_forwards
+from .forward import _FWD_ORDER, Forward, _merge_fwds, convert_forward_solution
 
 _accuracy_dict = dict(
     point=FWD.COIL_ACCURACY_POINT,
@@ -624,14 +623,16 @@ def make_forward_solution(
             Support for ``'fsaverage'`` argument.
     src : path-like | instance of SourceSpaces
         Either a path to a source space file or a loaded or generated
-        `~mne.source_space.SourceSpaces`.
-    bem : path-like | dict
+        :class:`~mne.SourceSpaces`.
+    bem : path-like | ConductorModel
         Filename of the BEM (e.g., ``"sample-5120-5120-5120-bem-sol.fif"``) to
-        use, or a loaded sphere model (dict).
+        use, or a loaded :class:`~mne.bem.ConductorModel`. See
+        :func:`~mne.make_bem_model` and :func:`~mne.make_bem_solution` to create a
+        :class:`mne.bem.ConductorModel`.
     meg : bool
-        If True (Default), include MEG computations.
+        If True (default), include MEG computations.
     eeg : bool
-        If True (Default), include EEG computations.
+        If True (default), include EEG computations.
     mindist : float
         Minimum distance of sources from inner skull surface (in mm).
     ignore_ref : bool
@@ -847,7 +848,7 @@ def make_forward_dipole(dipole, bem, info, trans=None, n_jobs=None, *, verbose=N
     data = np.zeros((len(amplitude), len(timepoints)))  # (n_d, n_t)
     row = 0
     for tpind, tp in enumerate(timepoints):
-        amp = amplitude[np.in1d(times, tp)]
+        amp = amplitude[np.isin(times, tp)]
         data[row : row + len(amp), tpind] = amp
         row += len(amp)
 

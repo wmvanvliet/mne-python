@@ -6,9 +6,9 @@
 
 import numpy as np
 
+from ..._fiff.constants import FIFF
 from ...io import BaseRaw
-from ...io.constants import FIFF
-from ...utils import _validate_type, warn, verbose
+from ...utils import _validate_type, verbose, warn
 from ..nirs import _validate_nirs_info
 
 

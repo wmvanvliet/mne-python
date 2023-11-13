@@ -4,25 +4,26 @@
 # License: BSD-3-Clause
 
 import numpy as np
+from scipy import linalg
 
+from ._fiff.meas_info import Info, _simplify_info
+from ._fiff.pick import _picks_by_type, _picks_to_idx, pick_channels_cov, pick_info
+from ._fiff.proj import make_projector
 from .defaults import _handle_default
-from .io.meas_info import _simplify_info
-from .io.pick import _picks_by_type, pick_info, pick_channels_cov, _picks_to_idx
-from .io.proj import make_projector
 from .utils import (
-    logger,
-    _compute_row_norms,
-    _pl,
-    _validate_type,
     _apply_scaling_cov,
-    _undo_scaling_cov,
-    _scaled_array,
-    warn,
-    _check_rank,
-    _on_missing,
-    verbose,
     _check_on_missing,
+    _check_rank,
+    _compute_row_norms,
+    _on_missing,
+    _pl,
+    _scaled_array,
+    _undo_scaling_cov,
+    _validate_type,
     fill_doc,
+    logger,
+    verbose,
+    warn,
 )
 
 
@@ -62,8 +63,6 @@ def estimate_rank(
         If return_singular is True, the singular values that were
         thresholded to determine the rank are also returned.
     """
-    from scipy import linalg
-
     if norm:
         data = data.copy()  # operate on a copy
         norms = _compute_row_norms(data)
@@ -263,8 +262,6 @@ def _get_rank_sss(
     """
     # XXX this is too basic for movement compensated data
     # https://github.com/mne-tools/mne-python/issues/4676
-    from .io.meas_info import Info
-
     info = inst if isinstance(inst, Info) else inst.info
     del inst
 
@@ -354,9 +351,9 @@ def compute_rank(
     -----
     .. versionadded:: 0.18
     """
-    from .io.base import BaseRaw
+    from .cov import Covariance
     from .epochs import BaseEpochs
-    from . import Covariance
+    from .io import BaseRaw
 
     rank = _check_rank(rank)
     scalings = _handle_default("scalings_cov_rank", scalings)
@@ -445,8 +442,7 @@ def compute_rank(
                 if isinstance(inst, BaseRaw):
                     data = inst.get_data(picks, reject_by_annotation="omit")
                 else:  # isinstance(inst, BaseEpochs):
-                    data = inst.get_data()[:, picks, :]
-                    data = np.concatenate(data, axis=1)
+                    data = np.concatenate(inst.get_data(picks), axis=1)
                 if proj:
                     data = np.dot(proj_op, data)
                 this_rank = _estimate_rank_meeg_signals(

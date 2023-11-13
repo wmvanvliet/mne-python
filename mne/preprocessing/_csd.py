@@ -13,15 +13,17 @@
 #          permission from authors of original GPL code
 
 import numpy as np
+from scipy.optimize import minimize_scalar
+from scipy.stats import gaussian_kde
 
-from .. import pick_types
-from ..utils import _validate_type, _ensure_int, _check_preload, verbose, logger
-from ..io import BaseRaw
-from ..io.constants import FIFF
-from ..epochs import BaseEpochs, make_fixed_length_epochs
-from ..evoked import Evoked
+from .._fiff.constants import FIFF
+from .._fiff.pick import pick_types
 from ..bem import fit_sphere_to_headshape
 from ..channels.interpolation import _calc_g, _calc_h
+from ..epochs import BaseEpochs, make_fixed_length_epochs
+from ..evoked import Evoked
+from ..io import BaseRaw
+from ..utils import _check_preload, _ensure_int, _validate_type, logger, verbose
 
 
 def _prepare_G(G, lambda2):
@@ -261,9 +263,6 @@ def compute_bridged_electrodes(
     ----------
     .. footbibliography::
     """
-    from scipy.stats import gaussian_kde
-    from scipy.optimize import minimize_scalar
-
     _check_preload(inst, "Computing bridged electrodes")
     inst = inst.copy()  # don't modify original
     picks = pick_types(inst.info, eeg=True)

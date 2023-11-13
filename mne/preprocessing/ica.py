@@ -5,100 +5,99 @@
 #
 # License: BSD-3-Clause
 
-from inspect import isfunction, signature, Parameter
+import json
+import math
+import warnings
 from collections import namedtuple
 from collections.abc import Sequence
 from copy import deepcopy
+from dataclasses import dataclass, is_dataclass
+from inspect import Parameter, isfunction, signature
 from numbers import Integral
 from time import time
-from dataclasses import dataclass, is_dataclass
-from typing import Optional, List, Literal
-import warnings
-
-import math
-import json
+from typing import List, Literal, Optional
 
 import numpy as np
+from scipy import linalg, stats
+from scipy.spatial import distance
+from scipy.special import expit
 
-from .ecg import qrs_detector, _get_ecg_channel_index, _make_ecg, create_ecg_epochs
-from .eog import _find_eog_events, _get_eog_channel_index
-from .infomax_ import infomax
-
-from ..cov import compute_whitener
-from .. import Covariance, Evoked
-from ..defaults import _BORDER_DEFAULT, _EXTRAPOLATE_DEFAULT, _INTERPOLATION_DEFAULT
-from ..io.pick import (
-    pick_types,
-    pick_channels,
-    pick_info,
-    _picks_to_idx,
-    _get_channel_types,
+from .._fiff.constants import FIFF
+from .._fiff.meas_info import ContainsMixin, read_meas_info, write_meas_info
+from .._fiff.open import fiff_open
+from .._fiff.pick import (
     _DATA_CH_TYPES_SPLIT,
+    _contains_ch_type,
+    _picks_by_type,
+    _picks_to_idx,
+    pick_channels,
+    pick_channels_regexp,
+    pick_info,
+    pick_types,
 )
-from ..io.proj import make_projector
-from ..io.write import (
-    write_double_matrix,
-    write_string,
-    write_name_list,
-    write_int,
-    start_block,
+from .._fiff.proj import make_projector
+from .._fiff.tag import read_tag
+from .._fiff.tree import dir_tree_find
+from .._fiff.write import (
     end_block,
+    start_and_end_file,
+    start_block,
+    write_double_matrix,
+    write_id,
+    write_int,
+    write_name_list,
+    write_string,
 )
-from ..io.tree import dir_tree_find
-from ..io.open import fiff_open
-from ..io.tag import read_tag
-from ..io.meas_info import write_meas_info, read_meas_info, ContainsMixin
-from ..io.constants import FIFF
-from ..io.base import BaseRaw
-from ..io.eeglab.eeglab import _get_info, _check_load_mat
-
+from ..channels.layout import _find_topomap_coords
+from ..cov import Covariance, compute_whitener
+from ..defaults import _BORDER_DEFAULT, _EXTRAPOLATE_DEFAULT, _INTERPOLATION_DEFAULT
 from ..epochs import BaseEpochs
+from ..evoked import Evoked
+from ..filter import filter_data
+from ..fixes import _safe_svd
+from ..html_templates import _get_html_template
+from ..io import BaseRaw
+from ..io.eeglab.eeglab import _check_load_mat, _get_info
+from ..utils import (
+    _PCA,
+    Bunch,
+    _check_all_same_channel_names,
+    _check_compensation_grade,
+    _check_fname,
+    _check_on_missing,
+    _check_option,
+    _check_preload,
+    _ensure_int,
+    _get_inst_data,
+    _on_missing,
+    _pl,
+    _reject_data_segments,
+    _require_version,
+    _validate_type,
+    check_fname,
+    check_random_state,
+    compute_corr,
+    copy_function_doc_to_method_doc,
+    fill_doc,
+    int_like,
+    logger,
+    repr_html,
+    verbose,
+    warn,
+)
 from ..viz import (
     plot_ica_components,
+    plot_ica_overlay,
     plot_ica_scores,
     plot_ica_sources,
-    plot_ica_overlay,
 )
 from ..viz.ica import plot_ica_properties
 from ..viz.topomap import _plot_corrmap
-
-from ..channels.channels import _contains_ch_type
-from ..channels.layout import _find_topomap_coords
-from ..io.write import start_and_end_file, write_id
-from ..utils import (
-    logger,
-    check_fname,
-    _check_fname,
-    verbose,
-    _reject_data_segments,
-    check_random_state,
-    _validate_type,
-    compute_corr,
-    _get_inst_data,
-    _ensure_int,
-    repr_html,
-    copy_function_doc_to_method_doc,
-    _pl,
-    warn,
-    Bunch,
-    _check_preload,
-    _check_compensation_grade,
-    fill_doc,
-    _check_option,
-    _PCA,
-    int_like,
-    _require_version,
-    _check_all_same_channel_names,
-    _check_on_missing,
-    _on_missing,
-)
-
-from ..fixes import _safe_svd
-from ..filter import filter_data
 from .bads import _find_outliers
 from .ctps_ import ctps
-from ..io.pick import pick_channels_regexp, _picks_by_type
-
+from .ecg import _get_ecg_channel_index, _make_ecg, create_ecg_epochs, qrs_detector
+from .eog import _find_eog_events, _get_eog_channel_index
+from .infomax_ import infomax
 
 __all__ = (
     "ICA",
@@ -141,9 +140,6 @@ def get_score_funcs():
     score_funcs : dict
         The score functions.
     """
-    from scipy import stats
-    from scipy.spatial import distance
-
     score_funcs = Bunch()
     xy_arg_dist_funcs = [
         (n, f)
@@ -188,7 +184,7 @@ def _check_for_unsupported_ica_channels(picks, info, allow_ref_meg=False):
     """
     types = _DATA_CH_TYPES_SPLIT + ("eog",)
     types += ("ref_meg",) if allow_ref_meg else ()
-    chs = _get_channel_types(info, picks, unique=True, only_data_chs=False)
+    chs = info.get_channel_types(picks, unique=True, only_data_chs=False)
     check = all([ch in types for ch in chs])
     if not check:
         raise ValueError(
@@ -575,10 +571,8 @@ class ICA(ContainsMixin):
 
     @repr_html
     def _repr_html_(self):
-        from ..html_templates import repr_templates_env
-
         infos = self._get_infos_for_repr()
-        t = repr_templates_env.get_template("ica.html.jinja")
+        t = _get_html_template("repr", "ica.html.jinja")
         html = t.render(
             fit_on=infos.fit_on,
             method=infos.fit_method,
@@ -824,7 +818,7 @@ class ICA(ContainsMixin):
             )
 
         # this should be a copy (picks a list of int)
-        data = epochs.get_data()[:, picks]
+        data = epochs.get_data(picks=picks)
         # this will be a view
         if decim is not None:
             data = data[:, :, ::decim]
@@ -1007,8 +1001,6 @@ class ICA(ContainsMixin):
         self.current_fit = fit_type
 
     def _update_mixing_matrix(self):
-        from scipy import linalg
-
         self.mixing_matrix_ = linalg.pinv(self.unmixing_matrix_)
 
     def _update_ica_names(self):
@@ -1044,7 +1036,7 @@ class ICA(ContainsMixin):
         if not hasattr(self, "mixing_matrix_"):
             raise RuntimeError("No fit available. Please fit ICA.")
         picks = self._get_picks(epochs)
-        data = np.hstack(epochs.get_data()[:, picks])
+        data = np.hstack(epochs.get_data(picks=picks))
         sources = self._transform(data)
         if not concatenate:
             # Put the data back in 3D
@@ -1377,8 +1369,8 @@ class ICA(ContainsMixin):
             ]
         with info._unlock(update_redundant=True, check_after=True):
             info["chs"] = ch_info
-            info["bads"] = [ch_names[k] for k in self.exclude]
             info["projs"] = []  # make sure projections are removed.
+        info["bads"] = [ch_names[k] for k in self.exclude]
 
     @verbose
     def score_sources(
@@ -1486,7 +1478,7 @@ class ICA(ContainsMixin):
         elif isinstance(inst, BaseEpochs):
             if isinstance(target, str):
                 pick = _get_target_ch(inst, target)
-                target = inst.get_data()[:, pick]
+                target = inst.get_data(picks=pick)
 
             if hasattr(target, "ndim"):
                 if target.ndim == 3 and min(target.shape) == 1:
@@ -1718,7 +1710,7 @@ class ICA(ContainsMixin):
                         keep_ecg=False,
                         reject_by_annotation=reject_by_annotation,
                     )
-                ).get_data()
+                ).get_data(copy=False)
 
                 if sources.shape[0] == 0:
                     warn(
@@ -1726,7 +1718,7 @@ class ICA(ContainsMixin):
                         "the input parameters."
                     )
             elif isinstance(inst, BaseEpochs):
-                sources = self.get_sources(inst).get_data()
+                sources = self.get_sources(inst).get_data(copy=False)
             else:
                 raise ValueError(
                     "With `ctps` only Raw and Epochs input is " "supported"
@@ -1994,9 +1986,6 @@ class ICA(ContainsMixin):
         -----
         .. versionadded:: 1.1
         """
-        from scipy.spatial.distance import pdist, squareform
-        from scipy.special import expit
-
         _validate_type(threshold, "numeric", "threshold")
 
         sources = self.get_sources(inst, start=start, stop=stop)
@@ -2025,10 +2014,10 @@ class ICA(ContainsMixin):
 
         # compute metric #3: smoothness
         smoothnesses = np.zeros((components.shape[1],))
-        dists = squareform(pdist(pos))
+        dists = distance.squareform(distance.pdist(pos))
         dists = 1 - (dists / dists.max())  # invert
         for idx, comp in enumerate(components.T):
-            comp_dists = squareform(pdist(comp[:, np.newaxis]))
+            comp_dists = distance.squareform(distance.pdist(comp[:, np.newaxis]))
             comp_dists /= comp_dists.max()
             smoothnesses[idx] = np.multiply(dists, comp_dists).sum()
 
@@ -2563,6 +2552,7 @@ class ICA(ContainsMixin):
         *,
         theme=None,
         overview_mode=None,
+        splash=True,
     ):
         return plot_ica_sources(
             self,
@@ -2580,6 +2570,7 @@ class ICA(ContainsMixin):
             use_opengl=use_opengl,
             theme=theme,
             overview_mode=overview_mode,
+            splash=splash,
         )
 
     @copy_function_doc_to_method_doc(plot_ica_scores)
@@ -3374,7 +3365,6 @@ def corrmap(
                 template=True,
                 sphere=sphere,
             )
-        template_fig.subplots_adjust(top=0.8)
         template_fig.canvas.draw()
 
     # first run: use user-selected map
@@ -3454,13 +3444,16 @@ def corrmap(
 
 
 @verbose
-def read_ica_eeglab(fname, *, verbose=None):
+def read_ica_eeglab(fname, *, montage_units="auto", verbose=None):
     """Load ICA information saved in an EEGLAB .set file.
 
     Parameters
     ----------
     fname : path-like
         Complete path to a ``.set`` EEGLAB file that contains an ICA object.
+    %(montage_units)s
+
+        .. versionadded:: 1.6
     %(verbose)s
 
     Returns
@@ -3468,10 +3461,8 @@ def read_ica_eeglab(fname, *, verbose=None):
     ica : instance of ICA
         An ICA object based on the information contained in the input file.
     """
-    from scipy import linalg
-
     eeg = _check_load_mat(fname, None)
-    info, eeg_montage, _ = _get_info(eeg)
+    info, eeg_montage, _ = _get_info(eeg, eog=(), montage_units=montage_units)
     info.set_montage(eeg_montage)
     pick_info(info, np.round(eeg["icachansind"]).astype(int) - 1, copy=False)
 

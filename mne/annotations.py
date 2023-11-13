@@ -3,55 +3,55 @@
 #
 # License: BSD-3-Clause
 
-from collections import OrderedDict
-from datetime import datetime, timedelta, timezone
+import json
 import os.path as op
 import re
-from copy import deepcopy
-from itertools import takewhile
-import json
-from collections import Counter
-from collections.abc import Iterable
 import warnings
+from collections import Counter, OrderedDict
+from collections.abc import Iterable
+from copy import deepcopy
+from datetime import datetime, timedelta, timezone
+from itertools import takewhile
 from textwrap import shorten
+
 import numpy as np
+from scipy.io import loadmat
 
-from .utils import (
-    _pl,
-    check_fname,
-    _validate_type,
-    verbose,
-    warn,
-    logger,
-    _check_pandas_installed,
-    _mask_to_onsets_offsets,
-    _DefaultEventParser,
-    _check_dt,
-    _stamp_to_dt,
-    _dt_to_stamp,
-    _check_fname,
-    int_like,
-    _check_option,
-    fill_doc,
-    _on_missing,
-    _is_numeric,
-    _check_dict_keys,
-)
-
-from .io.write import (
-    start_block,
+from ._fiff.constants import FIFF
+from ._fiff.open import fiff_open
+from ._fiff.tag import read_tag
+from ._fiff.tree import dir_tree_find
+from ._fiff.write import (
+    _safe_name_list,
     end_block,
+    start_and_end_file,
+    start_block,
+    write_double,
     write_float,
     write_name_list_sanitized,
-    _safe_name_list,
-    write_double,
-    start_and_end_file,
     write_string,
 )
-from .io.constants import FIFF
-from .io.open import fiff_open
-from .io.tree import dir_tree_find
-from .io.tag import read_tag
+from .utils import (
+    _check_dict_keys,
+    _check_dt,
+    _check_fname,
+    _check_option,
+    _check_pandas_installed,
+    _DefaultEventParser,
+    _dt_to_stamp,
+    _is_numeric,
+    _mask_to_onsets_offsets,
+    _on_missing,
+    _pl,
+    _stamp_to_dt,
+    _validate_type,
+    check_fname,
+    fill_doc,
+    int_like,
+    logger,
+    verbose,
+    warn,
+)
 
 # For testing windows_like_datetime, we monkeypatch "datetime" in this module.
 # Keep the true datetime object around for _validate_type use.
@@ -816,7 +816,7 @@ class EpochAnnotationsMixin:
                     "disk) before 1.0 will yield incorrect results if "
                     "decimation or resampling was performed on the instance, "
                     "we recommend regenerating the Epochs and re-saving them "
-                    "to disk"
+                    "to disk."
                 )
             new_annotations = annotations.copy()
             new_annotations._prune_ch_names(self.info, on_missing)
@@ -1139,7 +1139,8 @@ def _write_annotations_txt(fname, annot):
         np.savetxt(fid, data, delimiter=",", fmt="%s")
 
 
-def read_annotations(fname, sfreq="auto", uint16_codec=None):
+@fill_doc
+def read_annotations(fname, sfreq="auto", uint16_codec=None, encoding="utf8"):
     r"""Read annotations from a file.
 
     This function reads a ``.fif``, ``.fif.gz``, ``.vmrk``, ``.amrk``,
@@ -1167,6 +1168,8 @@ def read_annotations(fname, sfreq="auto", uint16_codec=None):
         too small". ``uint16_codec`` allows to specify what codec (for example:
         ``'latin1'`` or ``'utf-8'``) should be used when reading character
         arrays and can therefore help you solve this problem.
+    %(encoding_edf)s
+        Only used when reading EDF annotations.
 
     Returns
     -------
@@ -1180,11 +1183,11 @@ def read_annotations(fname, sfreq="auto", uint16_codec=None):
     ``.txt`` extension.
     """
     from .io.brainvision.brainvision import _read_annotations_brainvision
-    from .io.eeglab.eeglab import _read_annotations_eeglab
-    from .io.edf.edf import _read_annotations_edf
     from .io.cnt.cnt import _read_annotations_cnt
-    from .io.curry.curry import _read_annotations_curry
     from .io.ctf.markers import _read_annotations_ctf
+    from .io.curry.curry import _read_annotations_curry
+    from .io.edf.edf import _read_annotations_edf
+    from .io.eeglab.eeglab import _read_annotations_eeglab
 
     fname = str(
         _check_fname(
@@ -1202,15 +1205,7 @@ def read_annotations(fname, sfreq="auto", uint16_codec=None):
         with ff as fid:
             annotations = _read_annotations_fif(fid, tree)
     elif name.endswith("txt"):
-        orig_time = _read_annotations_txt_parse_header(fname)
-        onset, duration, description, ch_names = _read_annotations_txt(fname)
-        annotations = Annotations(
-            onset=onset,
-            duration=duration,
-            description=description,
-            orig_time=orig_time,
-            ch_names=ch_names,
-        )
+        annotations = _read_annotations_txt(fname)
 
     elif name.endswith(("vmrk", "amrk")):
         annotations = _read_annotations_brainvision(fname, sfreq=sfreq)
@@ -1231,12 +1226,7 @@ def read_annotations(fname, sfreq="auto", uint16_codec=None):
         annotations = _read_annotations_eeglab(fname, uint16_codec=uint16_codec)
 
     elif name.endswith(("edf", "bdf", "gdf")):
-        onset, duration, description = _read_annotations_edf(fname)
-        onset = np.array(onset, dtype=float)
-        duration = np.array(duration, dtype=float)
-        annotations = Annotations(
-            onset=onset, duration=duration, description=description, orig_time=None
-        )
+        annotations = _read_annotations_edf(fname, encoding=encoding)
 
     elif name.startswith("events_") and fname.endswith("mat"):
         annotations = _read_brainstorm_annotations(fname)
@@ -1308,12 +1298,11 @@ def _read_brainstorm_annotations(fname, orig_time=None):
     annot : instance of Annotations | None
         The annotations.
     """
-    from scipy import io
 
     def get_duration_from_times(t):
         return t[1] - t[0] if t.shape[0] == 2 else np.zeros(len(t[0]))
 
-    annot_data = io.loadmat(fname)
+    annot_data = loadmat(fname)
     onsets, durations, descriptions = (list(), list(), list())
     for label, _, _, _, times, _, _ in annot_data["events"][0]:
         onsets.append(times[0])
@@ -1369,7 +1358,18 @@ def _read_annotations_txt(fname):
             _safe_name_list(ch.decode().strip(), "read", f"ch_names[{ci}]")
             for ci, ch in enumerate(ch_names)
         ]
-    return onset, duration, desc, ch_names
+
+    orig_time = _read_annotations_txt_parse_header(fname)
+
+    annotations = Annotations(
+        onset=onset,
+        duration=duration,
+        description=desc,
+        orig_time=orig_time,
+        ch_names=ch_names,
+    )
+
+    return annotations
 
 
 def _read_annotations_fif(fid, tree):
@@ -1460,17 +1460,19 @@ def _select_events_based_on_id(events, event_desc):
 
 
 def _check_event_id(event_id, raw):
-    from .io.brainvision.brainvision import _BVEventParser
-    from .io.brainvision.brainvision import _check_bv_annot
-    from .io.brainvision.brainvision import RawBrainVision
-    from .io import RawFIF, RawArray
+    from .io import Raw, RawArray
+    from .io.brainvision.brainvision import (
+        RawBrainVision,
+        _BVEventParser,
+        _check_bv_annot,
+    )
 
     if event_id is None:
         return _DefaultEventParser()
     elif event_id == "auto":
         if isinstance(raw, RawBrainVision):
             return _BVEventParser()
-        elif isinstance(raw, (RawFIF, RawArray)) and _check_bv_annot(
+        elif isinstance(raw, (Raw, RawArray)) and _check_bv_annot(
             raw.annotations.description
         ):
             logger.info("Non-RawBrainVision raw using branvision markers")

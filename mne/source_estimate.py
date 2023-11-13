@@ -11,59 +11,61 @@ import os.path as op
 from types import GeneratorType
 
 import numpy as np
+from scipy import sparse
+from scipy.spatial.distance import cdist, pdist
 
+from ._fiff.constants import FIFF
+from ._fiff.meas_info import Info
+from ._fiff.pick import pick_types
+from ._freesurfer import _get_atlas_values, _get_mri_info_data, read_freesurfer_lut
 from .baseline import rescale
 from .cov import Covariance
 from .evoked import _get_peak
 from .filter import resample
 from .fixes import _safe_svd
-from ._freesurfer import _get_mri_info_data, _get_atlas_values, read_freesurfer_lut
-from .io.constants import FIFF
-from .io.pick import pick_types
-from .surface import read_surface, _get_ico_surface, mesh_edges, _project_onto_surface
-from .source_space import (
-    _ensure_src,
-    _get_morph_src_reordering,
-    _ensure_src_subject,
+from .source_space._source_space import (
     SourceSpaces,
-    _get_src_nn,
     _check_volume_labels,
+    _ensure_src,
+    _ensure_src_subject,
+    _get_morph_src_reordering,
+    _get_src_nn,
 )
+from .surface import _get_ico_surface, _project_onto_surface, mesh_edges, read_surface
 from .transforms import _get_trans, apply_trans
 from .utils import (
-    get_subjects_dir,
-    _check_subject,
-    logger,
-    verbose,
-    _pl,
-    _time_mask,
-    warn,
-    copy_function_doc_to_method_doc,
-    fill_doc,
+    TimeMixin,
+    _build_data_frame,
+    _check_fname,
     _check_option,
-    _validate_type,
+    _check_pandas_index_arguments,
+    _check_pandas_installed,
     _check_src_normal,
     _check_stc_units,
-    _check_pandas_installed,
-    _import_nibabel,
-    _check_pandas_index_arguments,
+    _check_subject,
+    _check_time_format,
     _convert_times,
     _ensure_int,
-    _build_data_frame,
-    _check_time_format,
-    _path_like,
-    sizeof_fmt,
-    object_size,
-    _check_fname,
     _import_h5io_funcs,
+    _import_nibabel,
+    _path_like,
+    _pl,
+    _time_mask,
+    _validate_type,
+    copy_function_doc_to_method_doc,
+    fill_doc,
+    get_subjects_dir,
+    logger,
+    object_size,
+    sizeof_fmt,
+    verbose,
+    warn,
 )
 from .viz import (
     plot_source_estimates,
     plot_vector_source_estimates,
     plot_volume_source_estimates,
 )
-from .io.base import TimeMixin
-from .io.meas_info import Info
 
 
 def _read_stc(filename):
@@ -1494,7 +1496,7 @@ class _BaseSurfaceSourceEstimate(_BaseSourceEstimate):
             stc_vertices = self.vertices[1]
 
         # find index of the Label's vertices
-        idx = np.nonzero(np.in1d(stc_vertices, label.vertices))[0]
+        idx = np.nonzero(np.isin(stc_vertices, label.vertices))[0]
 
         # find output vertices
         vertices = stc_vertices[idx]
@@ -1526,7 +1528,7 @@ class _BaseSurfaceSourceEstimate(_BaseSourceEstimate):
             The source estimate restricted to the given label.
         """
         # make sure label and stc are compatible
-        from .label import Label, BiHemiLabel
+        from .label import BiHemiLabel, Label
 
         _validate_type(label, (Label, BiHemiLabel), "label")
         if (
@@ -1851,7 +1853,7 @@ class SourceEstimate(_BaseSurfaceSourceEstimate):
         ----------
         .. footbibliography::
         """
-        from .forward import convert_forward_solution, Forward
+        from .forward import Forward, convert_forward_solution
         from .minimum_norm.inverse import _prepare_forward
 
         _validate_type(fwd, Forward, "fwd")
@@ -2366,7 +2368,7 @@ class _BaseVolSourceEstimate(_BaseSourceEstimate):
         assert len(label) == 1
         label = label[0]
         vertices = label.vertices
-        keep = np.in1d(self.vertices[0], label.vertices)
+        keep = np.isin(self.vertices[0], label.vertices)
         values, vertices = self.data[keep], [self.vertices[0][keep]]
         label_stc = self.__class__(
             values,
@@ -2920,7 +2922,7 @@ def _spatio_temporal_src_adjacency_surf(src, n_times):
     adjacency = spatio_temporal_tris_adjacency(tris, n_times)
 
     # deal with source space only using a subset of vertices
-    masks = [np.in1d(u, s["vertno"]) for s, u in zip(src, used_verts)]
+    masks = [np.isin(u, s["vertno"]) for s, u in zip(src, used_verts)]
     if sum(u.size for u in used_verts) != adjacency.shape[0] / n_times:
         raise ValueError("Used vertices do not match adjacency shape")
     if [np.sum(m) for m in masks] != [len(s["vertno"]) for s in src]:
@@ -3032,8 +3034,6 @@ def spatio_temporal_tris_adjacency(tris, n_times, remap_vertices=False, verbose=
         vertices are time 1, the nodes from 2 to 2N are the vertices
         during time 2, etc.
     """
-    from scipy import sparse
-
     if remap_vertices:
         logger.info("Reassigning vertex indices.")
         tris = np.searchsorted(np.unique(tris), tris)
@@ -3070,8 +3070,6 @@ def spatio_temporal_dist_adjacency(src, n_times, dist, verbose=None):
         vertices are time 1, the nodes from 2 to 2N are the vertices
         during time 2, etc.
     """
-    from scipy.sparse import block_diag as sparse_block_diag
-
     if src[0]["dist"] is None:
         raise RuntimeError(
             "src must have distances included, consider using "
@@ -3084,7 +3082,7 @@ def spatio_temporal_dist_adjacency(src, n_times, dist, verbose=None):
             block[block == 0] = -np.inf
         else:
             block.data[block.data == 0] == -1
-    edges = sparse_block_diag(blocks)
+    edges = sparse.block_diag(blocks)
     edges.data[:] = np.less_equal(edges.data, dist)
     # clean it up and put it in coo format
     edges = edges.tocsr()
@@ -3182,9 +3180,6 @@ def spatial_inter_hemi_adjacency(src, dist, verbose=None):
         existing intra-hemispheric adjacency matrix, e.g. computed
         using geodesic distances.
     """
-    from scipy import sparse
-    from scipy.spatial.distance import cdist
-
     src = _ensure_src(src, kind="surface")
     adj = cdist(src[0]["rr"][src[0]["vertno"]], src[1]["rr"][src[1]["vertno"]])
     adj = sparse.csr_matrix(adj <= dist, dtype=int)
@@ -3198,8 +3193,6 @@ def spatial_inter_hemi_adjacency(src, dist, verbose=None):
 @verbose
 def _get_adjacency_from_edges(edges, n_times, verbose=None):
     """Given edges sparse matrix, create adjacency matrix."""
-    from scipy.sparse import coo_matrix
-
     n_vertices = edges.shape[0]
     logger.info("-- number of adjacent vertices : %d" % n_vertices)
     nnz = edges.col.size
@@ -3219,7 +3212,7 @@ def _get_adjacency_from_edges(edges, n_times, verbose=None):
     data = np.ones(
         edges.data.size * n_times + 2 * n_vertices * (n_times - 1), dtype=np.int64
     )
-    adjacency = coo_matrix((data, (row, col)), shape=(n_times * n_vertices,) * 2)
+    adjacency = sparse.coo_matrix((data, (row, col)), shape=(n_times * n_vertices,) * 2)
     return adjacency
 
 
@@ -3247,6 +3240,7 @@ _label_funcs = {
     "mean_flip": lambda flip, data: np.mean(flip * data, axis=0),
     "max": lambda flip, data: np.max(np.abs(data), axis=0),
     "pca_flip": _pca_flip,
+    None: lambda flip, data: data,  # Return Identity: Preserves all vertices.
 }
 
 
@@ -3272,7 +3266,7 @@ def _check_stc_src(stc, src):
             second_kind="stc.subject",
         )
         for s, v, hemi in zip(src, stc.vertices, ("left", "right")):
-            n_missing = (~np.in1d(v, s["vertno"])).sum()
+            n_missing = (~np.isin(v, s["vertno"])).sum()
             if n_missing:
                 raise ValueError(
                     "%d/%d %s hemisphere stc vertices "
@@ -3289,8 +3283,7 @@ def _prepare_label_extraction(stc, labels, src, mode, allow_empty, use_sparse):
     # of vol src space.
     # If stc=None (i.e. no activation time courses provided) and mode='mean',
     # only computes vertex indices and label_flip will be list of None.
-    from scipy import sparse
-    from .label import label_sign_flip, Label, BiHemiLabel
+    from .label import BiHemiLabel, Label, label_sign_flip
 
     # if source estimate provided in stc, get vertices from source space and
     # check that they are the same as in the stcs
@@ -3502,7 +3495,7 @@ def _volume_labels(src, labels, mri_resolution):
 
 
 def _get_default_label_modes():
-    return sorted(_label_funcs.keys()) + ["auto"]
+    return sorted(_label_funcs.keys(), key=lambda x: (x is None, x)) + ["auto"]
 
 
 def _get_allowed_label_modes(stc):
@@ -3523,8 +3516,6 @@ def _gen_extract_label_time_course(
     verbose=None,
 ):
     # loop through source estimates and extract time series
-    from scipy import sparse
-
     if src is None and mode in ["mean", "max"]:
         kind = "surface"
     else:
@@ -3582,7 +3573,12 @@ def _gen_extract_label_time_course(
         )
 
         # do the extraction
-        label_tc = np.zeros((n_labels,) + stc.data.shape[1:], dtype=stc.data.dtype)
+        if mode is None:
+            # prepopulate an empty list for easy array-like index-based assignment
+            label_tc = [None] * max(len(label_vertidx), len(src_flip))
+        else:
+            # For other modes, initialize the label_tc array
+            label_tc = np.zeros((n_labels,) + stc.data.shape[1:], dtype=stc.data.dtype)
         for i, (vertidx, flip) in enumerate(zip(label_vertidx, src_flip)):
             if vertidx is not None:
                 if isinstance(vertidx, sparse.csr_matrix):
@@ -3595,15 +3591,13 @@ def _gen_extract_label_time_course(
                     this_data = stc.data[vertidx]
                 label_tc[i] = func(flip, this_data)
 
-        # extract label time series for the vol src space (only mean supported)
-        offset = nvert[:-n_mean].sum()  # effectively :2 or :0
-        for i, nv in enumerate(nvert[2:]):
-            if nv != 0:
-                v2 = offset + nv
-                label_tc[n_mode + i] = np.mean(stc.data[offset:v2], axis=0)
-                offset = v2
-
-        # this is a generator!
+        if mode is not None:
+            offset = nvert[:-n_mean].sum()  # effectively :2 or :0
+            for i, nv in enumerate(nvert[2:]):
+                if nv != 0:
+                    v2 = offset + nv
+                    label_tc[n_mode + i] = np.mean(stc.data[offset:v2], axis=0)
+                    offset = v2
         yield label_tc
 
 
@@ -3780,7 +3774,6 @@ def stc_near_sensors(
 
     .. versionadded:: 0.22
     """
-    from scipy.spatial.distance import cdist, pdist
     from .evoked import Evoked
 
     _validate_type(evoked, Evoked, "evoked")
