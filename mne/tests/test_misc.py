@@ -1,9 +1,12 @@
-import os.path as op
+# Authors: Alexandre Gramfort <alexandre.gramfort@inria.fr>
+#
+# License: BSD-3-Clause
+
+from pathlib import Path
 
 from mne.misc import parse_config
 
-ave_fname = op.join(op.dirname(__file__), '..', 'io', 'tests', 'data',
-                    'test.ave')
+ave_fname = Path(__file__).parent.parent / "io" / "tests" / "data" / "test.ave"
 
 
 def test_parse_ave():

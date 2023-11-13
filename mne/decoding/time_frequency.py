@@ -1,12 +1,13 @@
 # Author: Jean-Remi King <jeanremi.king@gmail.com>
 #
-# License: BSD (3-clause)
+# License: BSD-3-Clause
 
 import numpy as np
-from .mixin import TransformerMixin
+
+from ..time_frequency.tfr import _compute_tfr
+from ..utils import _check_option, fill_doc, verbose
 from .base import BaseEstimator
-from ..time_frequency.tfr import _compute_tfr, _check_tfr_param
-from ..utils import fill_doc, _check_option
+from .mixin import TransformerMixin
 
 
 @fill_doc
@@ -59,13 +60,24 @@ class TimeFrequency(TransformerMixin, BaseEstimator):
     mne.time_frequency.tfr_multitaper
     """
 
-    def __init__(self, freqs, sfreq=1.0, method='morlet', n_cycles=7.0,
-                 time_bandwidth=None, use_fft=True, decim=1, output='complex',
-                 n_jobs=1, verbose=None):  # noqa: D102
+    @verbose
+    def __init__(
+        self,
+        freqs,
+        sfreq=1.0,
+        method="morlet",
+        n_cycles=7.0,
+        time_bandwidth=None,
+        use_fft=True,
+        decim=1,
+        output="complex",
+        n_jobs=1,
+        verbose=None,
+    ):  # noqa: D102
         """Init TimeFrequency transformer."""
-        freqs, sfreq, _, n_cycles, time_bandwidth, decim = \
-            _check_tfr_param(freqs, sfreq, method, True, n_cycles,
-                             time_bandwidth, use_fft, decim, output)
+        # Check non-average output
+        output = _check_option("output", output, ["complex", "power", "phase"])
+
         self.freqs = freqs
         self.sfreq = sfreq
         self.method = method
@@ -74,8 +86,7 @@ class TimeFrequency(TransformerMixin, BaseEstimator):
         self.use_fft = use_fft
         self.decim = decim
         # Check that output is not an average metric (e.g. ITC)
-        self.output = _check_option('output', output,
-                                    ['complex', 'power', 'phase'])
+        self.output = output
         self.n_jobs = n_jobs
         self.verbose = verbose
 
@@ -136,10 +147,20 @@ class TimeFrequency(TransformerMixin, BaseEstimator):
             X = X[:, np.newaxis, :]
 
         # Compute time-frequency
-        Xt = _compute_tfr(X, self.freqs, self.sfreq, self.method,
-                          self.n_cycles, True, self.time_bandwidth,
-                          self.use_fft, self.decim, self.output, self.n_jobs,
-                          self.verbose)
+        Xt = _compute_tfr(
+            X,
+            self.freqs,
+            self.sfreq,
+            self.method,
+            self.n_cycles,
+            True,
+            self.time_bandwidth,
+            self.use_fft,
+            self.decim,
+            self.output,
+            self.n_jobs,
+            self.verbose,
+        )
 
         # Back to original shape
         if not shape:

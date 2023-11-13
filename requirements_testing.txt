@@ -1,13 +1,15 @@
-pytest!=4.6.0
+# requirements for running tests (on top of environment.yml/requirements.txt)
+pytest
 pytest-cov
 pytest-timeout
 pytest-harvest
-flake8
-flake8-array-spacing
-sphinx-gallery
+pytest-qt
+ruff
 numpydoc
 codespell
-pydocstyle
 check-manifest
+tomli; python_version<'3.11'
 twine
 wheel
+pre-commit
+black

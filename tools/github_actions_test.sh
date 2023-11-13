@@ -1,31 +1,17 @@
-#!/bin/bash -ef
+#!/bin/bash
 
-# Remove numpydoc tests on older Python (builtin docstrings not as good)
-if [ "${PYTHON_VERSION}" == "3.6" ]; then
-	pip uninstall -yq numpydoc;
-fi;
+set -eo pipefail
 
-# Test run_tests_if_main
-if [ "${DEPS}" == "minimal" ]; then
-	pip uninstall -yq mne;
-	pip install -e .;
-	python mne/tests/test_evoked.py;
-fi;
-
-USE_DIRS="mne/"
-if [ "${CI_OS_NAME}" != "osx" ]; then
-  CONDITION="not ultraslowtest"
-else
-  CONDITION="not slowtest"
+if [[ "${CI_OS_NAME}" == "ubuntu"* ]]; then
+  CONDITION="not (ultraslowtest or pgtest)"
+else  # macOS or Windows
+  CONDITION="not (slowtest or pgtest)"
 fi
-echo 'pytest -m "${CONDITION}" --tb=short --cov=mne --cov-report xml -vv ${USE_DIRS}'
+if [ "${MNE_CI_KIND}" == "notebook" ]; then
+  USE_DIRS=mne/viz/
+else
+  USE_DIRS="mne/"
+fi
+set -x
 pytest -m "${CONDITION}" --tb=short --cov=mne --cov-report xml -vv ${USE_DIRS}
-
-# run the minimal one with the testing data as well
-if [ "${DEPS}" == "minimal" ]; then
-	export MNE_SKIP_TESTING_DATASET_TESTS=false;
-	python -c 'import mne; mne.datasets.testing.data_path(verbose=True)';
-fi;
-if [ "${DEPS}" == "minimal" ]; then
-	pytest -m "${CONDITION}" --tb=short --cov=mne -vv ${USE_DIRS};
-fi;
+set +x

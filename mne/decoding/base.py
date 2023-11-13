@@ -4,14 +4,16 @@
 #          Alexandre Gramfort <alexandre.gramfort@inria.fr>
 #          Jean-Remi King <jeanremi.king@gmail.com>
 #
-# License: BSD (3-clause)
+# License: BSD-3-Clause
+
+import datetime as dt
+import numbers
 
 import numpy as np
-import time
-import numbers
+
+from ..fixes import BaseEstimator, _check_fit_params, _get_check_scoring
 from ..parallel import parallel_func
-from ..fixes import BaseEstimator, is_classifier, _get_check_scoring
-from ..utils import logger, warn, fill_doc
+from ..utils import verbose, warn
 
 
 class LinearModel(BaseEstimator):
@@ -51,13 +53,37 @@ class LinearModel(BaseEstimator):
     .. footbibliography::
     """
 
+    _model_attr_wrap = (
+        "transform",
+        "predict",
+        "predict_proba",
+        "_estimator_type",
+        "decision_function",
+        "score",
+        "classes_",
+    )
+
     def __init__(self, model=None):  # noqa: D102
         if model is None:
             from sklearn.linear_model import LogisticRegression
-            model = LogisticRegression(solver='liblinear')
+
+            model = LogisticRegression(solver="liblinear")
 
         self.model = model
-        self._estimator_type = getattr(model, "_estimator_type", None)
+
+    def _more_tags(self):
+        return {"no_validation": True}
+
+    def __getattr__(self, attr):
+        """Wrap to model for some attributes."""
+        if attr in LinearModel._model_attr_wrap:
+            return getattr(self.model, attr)
+        elif attr == "fit_transform" and hasattr(self.model, "fit_transform"):
+            return super().__getattr__(self, "_fit_transform")
+        return super().__getattr__(self, attr)
+
+    def _fit_transform(self, X, y):
+        return self.fit(X, y).transform(X)
 
     def fit(self, X, y, **fit_params):
         """Estimate the coefficients of the linear model.
@@ -81,18 +107,22 @@ class LinearModel(BaseEstimator):
         """
         X, y = np.asarray(X), np.asarray(y)
         if X.ndim != 2:
-            raise ValueError('LinearModel only accepts 2-dimensional X, got '
-                             '%s instead.' % (X.shape,))
+            raise ValueError(
+                "LinearModel only accepts 2-dimensional X, got "
+                "%s instead." % (X.shape,)
+            )
         if y.ndim > 2:
-            raise ValueError('LinearModel only accepts up to 2-dimensional y, '
-                             'got %s instead.' % (y.shape,))
+            raise ValueError(
+                "LinearModel only accepts up to 2-dimensional y, "
+                "got %s instead." % (y.shape,)
+            )
 
         # fit the Model
         self.model.fit(X, y, **fit_params)
 
         # Computes patterns using Haufe's trick: A = Cov_X . W . Precision_Y
 
-        inv_Y = 1.
+        inv_Y = 1.0
         X = X - X.mean(0, keepdims=True)
         if y.ndim == 2 and y.shape[1] != 1:
             y = y - y.mean(0, keepdims=True)
@@ -103,174 +133,80 @@ class LinearModel(BaseEstimator):
 
     @property
     def filters_(self):
-        if hasattr(self.model, 'coef_'):
+        if hasattr(self.model, "coef_"):
             # Standard Linear Model
             filters = self.model.coef_
-        elif hasattr(self.model.best_estimator_, 'coef_'):
+        elif hasattr(self.model.best_estimator_, "coef_"):
             # Linear Model with GridSearchCV
             filters = self.model.best_estimator_.coef_
         else:
-            raise ValueError('model does not have a `coef_` attribute.')
+            raise ValueError("model does not have a `coef_` attribute.")
         if filters.ndim == 2 and filters.shape[0] == 1:
             filters = filters[0]
         return filters
-
-    def transform(self, X):
-        """Transform the data using the linear model.
-
-        Parameters
-        ----------
-        X : array, shape (n_samples, n_features)
-            The data to transform.
-
-        Returns
-        -------
-        y_pred : array, shape (n_samples,)
-            The predicted targets.
-        """
-        return self.model.transform(X)
-
-    def fit_transform(self, X, y):
-        """Fit the data and transform it using the linear model.
-
-        Parameters
-        ----------
-        X : array, shape (n_samples, n_features)
-            The training input samples to estimate the linear coefficients.
-        y : array, shape (n_samples,)
-            The target values.
-
-        Returns
-        -------
-        y_pred : array, shape (n_samples,)
-            The predicted targets.
-        """
-        return self.fit(X, y).transform(X)
-
-    def predict(self, X):
-        """Compute predictions of y from X.
-
-        Parameters
-        ----------
-        X : array, shape (n_samples, n_features)
-            The data used to compute the predictions.
-
-        Returns
-        -------
-        y_pred : array, shape (n_samples,)
-            The predictions.
-        """
-        return self.model.predict(X)
-
-    def predict_proba(self, X):
-        """Compute probabilistic predictions of y from X.
-
-        Parameters
-        ----------
-        X : array, shape (n_samples, n_features)
-            The data used to compute the predictions.
-
-        Returns
-        -------
-        y_pred : array, shape (n_samples, n_classes)
-            The probabilities.
-        """
-        return self.model.predict_proba(X)
-
-    def decision_function(self, X):
-        """Compute distance from the decision function of y from X.
-
-        Parameters
-        ----------
-        X : array, shape (n_samples, n_features)
-            The data used to compute the predictions.
-
-        Returns
-        -------
-        y_pred : array, shape (n_samples, n_classes)
-            The distances.
-        """
-        return self.model.decision_function(X)
-
-    def score(self, X, y):
-        """Score the linear model computed on the given test data.
-
-        Parameters
-        ----------
-        X : array, shape (n_samples, n_features)
-            The data to transform.
-        y : array, shape (n_samples,)
-            The target values.
-
-        Returns
-        -------
-        score : float
-            Score of the linear model.
-        """
-        return self.model.score(X, y)
 
 
 def _set_cv(cv, estimator=None, X=None, y=None):
     """Set the default CV depending on whether clf is classifier/regressor."""
     # Detect whether classification or regression
-    if estimator in ['classifier', 'regressor']:
-        est_is_classifier = estimator == 'classifier'
+    from sklearn.base import is_classifier
+
+    if estimator in ["classifier", "regressor"]:
+        est_is_classifier = estimator == "classifier"
     else:
         est_is_classifier = is_classifier(estimator)
     # Setup CV
     from sklearn import model_selection as models
-    from sklearn.model_selection import (check_cv, StratifiedKFold, KFold)
+    from sklearn.model_selection import KFold, StratifiedKFold, check_cv
+
     if isinstance(cv, (int, np.int64)):
         XFold = StratifiedKFold if est_is_classifier else KFold
         cv = XFold(n_splits=cv)
     elif isinstance(cv, str):
         if not hasattr(models, cv):
-            raise ValueError('Unknown cross-validation')
+            raise ValueError("Unknown cross-validation")
         cv = getattr(models, cv)
         cv = cv()
     cv = check_cv(cv=cv, y=y, classifier=est_is_classifier)
 
     # Extract train and test set to retrieve them at predict time
-    if hasattr(cv, 'split'):
-        cv_splits = [(train, test) for train, test in
-                     cv.split(X=np.zeros_like(y), y=y)]
-    else:
-        # XXX support sklearn.cross_validation cv
-        cv_splits = [(train, test) for train, test in cv]
+    cv_splits = [(train, test) for train, test in cv.split(X=np.zeros_like(y), y=y)]
 
     if not np.all([len(train) for train, _ in cv_splits]):
-        raise ValueError('Some folds do not have any train epochs.')
+        raise ValueError("Some folds do not have any train epochs.")
 
     return cv, cv_splits
 
 
 def _check_estimator(estimator, get_params=True):
     """Check whether an object has the methods required by sklearn."""
-    valid_methods = ('predict', 'transform', 'predict_proba',
-                     'decision_function')
-    if (
-        (not hasattr(estimator, 'fit')) or
-        (not any(hasattr(estimator, method) for method in valid_methods))
+    valid_methods = ("predict", "transform", "predict_proba", "decision_function")
+    if (not hasattr(estimator, "fit")) or (
+        not any(hasattr(estimator, method) for method in valid_methods)
     ):
-        raise ValueError('estimator must be a scikit-learn transformer or '
-                         'an estimator with the fit and a predict-like (e.g. '
-                         'predict_proba) or a transform method.')
+        raise ValueError(
+            "estimator must be a scikit-learn transformer or "
+            "an estimator with the fit and a predict-like (e.g. "
+            "predict_proba) or a transform method."
+        )
 
-    if get_params and not hasattr(estimator, 'get_params'):
-        raise ValueError('estimator must be a scikit-learn transformer or an '
-                         'estimator with the get_params method that allows '
-                         'cloning.')
+    if get_params and not hasattr(estimator, "get_params"):
+        raise ValueError(
+            "estimator must be a scikit-learn transformer or an "
+            "estimator with the get_params method that allows "
+            "cloning."
+        )
 
 
 def _get_inverse_funcs(estimator, terminal=True):
     """Retrieve the inverse functions of an pipeline or an estimator."""
     inverse_func = [False]
-    if hasattr(estimator, 'steps'):
+    if hasattr(estimator, "steps"):
         # if pipeline, retrieve all steps by nesting
         inverse_func = list()
         for _, est in estimator.steps:
             inverse_func.extend(_get_inverse_funcs(est, terminal=False))
-    elif hasattr(estimator, 'inverse_transform'):
+    elif hasattr(estimator, "inverse_transform"):
         # if not pipeline attempt to retrieve inverse function
         inverse_func = [estimator.inverse_transform]
 
@@ -278,7 +214,7 @@ def _get_inverse_funcs(estimator, terminal=True):
     # and remove it from the transformers.
     if terminal:
         last_is_estimator = inverse_func[-1] is False
-        all_invertible = not(False in inverse_func[:-1])
+        all_invertible = False not in inverse_func[:-1]
         if last_is_estimator and all_invertible:
             # keep all inverse transformation and remove last estimation
             inverse_func = inverse_func[:-1]
@@ -288,7 +224,7 @@ def _get_inverse_funcs(estimator, terminal=True):
     return inverse_func
 
 
-def get_coef(estimator, attr='filters_', inverse_transform=False):
+def get_coef(estimator, attr="filters_", inverse_transform=False):
     """Retrieve the coefficients of an estimator ending with a Linear Model.
 
     This is typically useful to retrieve "spatial filters" or "spatial
@@ -316,13 +252,13 @@ def get_coef(estimator, attr='filters_', inverse_transform=False):
     """
     # Get the coefficients of the last estimator in case of nested pipeline
     est = estimator
-    while hasattr(est, 'steps'):
+    while hasattr(est, "steps"):
         est = est.steps[-1][1]
 
     squeeze_first_dim = False
 
     # If SlidingEstimator, loop across estimators
-    if hasattr(est, 'estimators_'):
+    if hasattr(est, "estimators_"):
         coef = list()
         for this_est in est.estimators_:
             coef.append(get_coef(this_est, attr, inverse_transform))
@@ -330,8 +266,9 @@ def get_coef(estimator, attr='filters_', inverse_transform=False):
         coef = coef[np.newaxis]  # fake a sample dimension
         squeeze_first_dim = True
     elif not hasattr(est, attr):
-        raise ValueError('This estimator does not have a %s attribute:\n%s'
-                         % (attr, est))
+        raise ValueError(
+            "This estimator does not have a %s attribute:\n%s" % (attr, est)
+        )
     else:
         coef = getattr(est, attr)
 
@@ -341,9 +278,10 @@ def get_coef(estimator, attr='filters_', inverse_transform=False):
 
     # inverse pattern e.g. to get back physical units
     if inverse_transform:
-        if not hasattr(estimator, 'steps') and not hasattr(est, 'estimators_'):
-            raise ValueError('inverse_transform can only be applied onto '
-                             'pipeline estimators.')
+        if not hasattr(estimator, "steps") and not hasattr(est, "estimators_"):
+            raise ValueError(
+                "inverse_transform can only be applied onto " "pipeline estimators."
+            )
         # The inverse_transform parameter will call this method on any
         # estimator contained in the pipeline, in reverse order.
         for inverse_func in _get_inverse_funcs(estimator)[::-1]:
@@ -355,10 +293,19 @@ def get_coef(estimator, attr='filters_', inverse_transform=False):
     return coef
 
 
-@fill_doc
-def cross_val_multiscore(estimator, X, y=None, groups=None, scoring=None,
-                         cv=None, n_jobs=1, verbose=0, fit_params=None,
-                         pre_dispatch='2*n_jobs'):
+@verbose
+def cross_val_multiscore(
+    estimator,
+    X,
+    y=None,
+    groups=None,
+    scoring=None,
+    cv=None,
+    n_jobs=None,
+    verbose=None,
+    fit_params=None,
+    pre_dispatch="2*n_jobs",
+):
     """Evaluate a score by cross-validation.
 
     Parameters
@@ -386,7 +333,7 @@ def cross_val_multiscore(estimator, X, y=None, groups=None, scoring=None,
         Determines the cross-validation splitting strategy.
         Possible inputs for cv are:
 
-        - None, to use the default 3-fold cross validation,
+        - None, to use the default 5-fold cross validation,
         - integer, to specify the number of folds in a ``(Stratified)KFold``,
         - An object to be used as a cross-validation generator.
         - An iterable yielding train, test splits.
@@ -396,8 +343,7 @@ def cross_val_multiscore(estimator, X, y=None, groups=None, scoring=None,
         :class:`sklearn.model_selection.StratifiedKFold` is used. In all
         other cases, :class:`sklearn.model_selection.KFold` is used.
     %(n_jobs)s
-    verbose : int, optional
-        The verbosity level.
+    %(verbose)s
     fit_params : dict, optional
         Parameters to pass to the fit method of the estimator.
     pre_dispatch : int, or str, optional
@@ -421,10 +367,10 @@ def cross_val_multiscore(estimator, X, y=None, groups=None, scoring=None,
         Array of scores of the estimator for each run of the cross validation.
     """
     # This code is copied from sklearn
-
-    from sklearn.base import clone
-    from sklearn.utils import indexable
+    from sklearn.base import clone, is_classifier
     from sklearn.model_selection._split import check_cv
+    from sklearn.utils import indexable
+
     check_scoring = _get_check_scoring()
 
     X, y, groups = indexable(X, y, groups)
@@ -435,31 +381,52 @@ def cross_val_multiscore(estimator, X, y=None, groups=None, scoring=None,
     # We clone the estimator to make sure that all the folds are
     # independent, and that it is pickle-able.
     # Note: this parallelization is implemented using MNE Parallel
-    parallel, p_func, n_jobs = parallel_func(_fit_and_score, n_jobs,
-                                             pre_dispatch=pre_dispatch)
-    scores = parallel(p_func(clone(estimator), X, y, scorer, train, test,
-                             0, None, fit_params)
-                      for train, test in cv_iter)
+    parallel, p_func, n_jobs = parallel_func(
+        _fit_and_score, n_jobs, pre_dispatch=pre_dispatch
+    )
+    position = hasattr(estimator, "position")
+    scores = parallel(
+        p_func(
+            estimator=clone(estimator),
+            X=X,
+            y=y,
+            scorer=scorer,
+            train=train,
+            test=test,
+            fit_params=fit_params,
+            verbose=verbose,
+            parameters=dict(position=ii % n_jobs) if position else None,
+        )
+        for ii, (train, test) in enumerate(cv_iter)
+    )
     return np.array(scores)[:, 0, ...]  # flatten over joblib output.
 
 
-def _fit_and_score(estimator, X, y, scorer, train, test, verbose,
-                   parameters, fit_params, return_train_score=False,
-                   return_parameters=False, return_n_test_samples=False,
-                   return_times=False, error_score='raise'):
+# This verbose is necessary to properly set the verbosity level
+# during parallelization
+@verbose
+def _fit_and_score(
+    estimator,
+    X,
+    y,
+    scorer,
+    train,
+    test,
+    parameters,
+    fit_params,
+    return_train_score=False,
+    return_parameters=False,
+    return_n_test_samples=False,
+    return_times=False,
+    error_score="raise",
+    *,
+    verbose=None,
+    position=0,
+):
     """Fit estimator and compute scores for a given dataset split."""
     #  This code is adapted from sklearn
-    from ..fixes import _check_fit_params
     from sklearn.utils.metaestimators import _safe_split
     from sklearn.utils.validation import _num_samples
-
-    if verbose > 1:
-        if parameters is None:
-            msg = ''
-        else:
-            msg = '%s' % (', '.join('%s=%s' % (k, v)
-                          for k, v in parameters.items()))
-        print("[CV] %s %s" % (msg, (64 - len(msg)) * '.'))
 
     # Adjust length of sample weights
     fit_params = fit_params if fit_params is not None else {}
@@ -468,7 +435,7 @@ def _fit_and_score(estimator, X, y, scorer, train, test, verbose,
     if parameters is not None:
         estimator.set_params(**parameters)
 
-    start_time = time.time()
+    start_time = dt.datetime.now()
 
     X_train, y_train = _safe_split(estimator, X, y, train)
     X_test, y_test = _safe_split(estimator, X, y, test, train)
@@ -481,42 +448,39 @@ def _fit_and_score(estimator, X, y, scorer, train, test, verbose,
 
     except Exception as e:
         # Note fit time as time until error
-        fit_time = time.time() - start_time
-        score_time = 0.0
-        if error_score == 'raise':
+        fit_duration = dt.datetime.now() - start_time
+        score_duration = dt.timedelta(0)
+        if error_score == "raise":
             raise
         elif isinstance(error_score, numbers.Number):
             test_score = error_score
             if return_train_score:
                 train_score = error_score
-            warn("Classifier fit failed. The score on this train-test"
-                 " partition for these parameters will be set to %f. "
-                 "Details: \n%r" % (error_score, e))
+            warn(
+                "Classifier fit failed. The score on this train-test"
+                " partition for these parameters will be set to %f. "
+                "Details: \n%r" % (error_score, e)
+            )
         else:
-            raise ValueError("error_score must be the string 'raise' or a"
-                             " numeric value. (Hint: if using 'raise', please"
-                             " make sure that it has been spelled correctly.)")
+            raise ValueError(
+                "error_score must be the string 'raise' or a"
+                " numeric value. (Hint: if using 'raise', please"
+                " make sure that it has been spelled correctly.)"
+            )
 
     else:
-        fit_time = time.time() - start_time
+        fit_duration = dt.datetime.now() - start_time
         test_score = _score(estimator, X_test, y_test, scorer)
-        score_time = time.time() - start_time - fit_time
+        score_duration = dt.datetime.now() - start_time - fit_duration
         if return_train_score:
             train_score = _score(estimator, X_train, y_train, scorer)
-
-    if verbose > 2:
-        msg += ", score=%f" % test_score
-    if verbose > 1:
-        total_time = score_time + fit_time
-        end_msg = "%s, total=%s" % (msg, logger.short_format_time(total_time))
-        print("[CV] %s %s" % ((64 - len(end_msg)) * '.', end_msg))
 
     ret = [train_score, test_score] if return_train_score else [test_score]
 
     if return_n_test_samples:
         ret.append(_num_samples(X_test))
     if return_times:
-        ret.extend([fit_time, score_time])
+        ret.extend([fit_duration.total_seconds(), score_duration.total_seconds()])
     if return_parameters:
         ret.append(parameters)
     return ret
@@ -532,7 +496,7 @@ def _score(estimator, X_test, y_test, scorer):
         score = scorer(estimator, X_test)
     else:
         score = scorer(estimator, X_test, y_test)
-    if hasattr(score, 'item'):
+    if hasattr(score, "item"):
         try:
             # e.g. unwrap memmapped scalars
             score = score.item()

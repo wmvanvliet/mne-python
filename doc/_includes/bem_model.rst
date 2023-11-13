@@ -3,10 +3,6 @@
 Creating the BEM meshes
 =======================
 
-.. contents:: Page contents
-   :local:
-   :depth: 2
-
 .. NOTE: part of this file is included in doc/overview/implementation.rst.
    Changes here are reflected there. If you want to link to this content, link
    to :ref:`bem-model` to link to that section of the implementation.rst page.
@@ -21,7 +17,7 @@ Using the watershed algorithm
 
 The watershed algorithm [Segonne *et al.*,
 2004] is part of the FreeSurfer software.
-The name of the program is mri_watershed .
+The name of the program is ``mri_watershed``.
 Its use in the MNE environment is facilitated by the script
 :ref:`mne watershed_bem`.
 
@@ -43,6 +39,7 @@ a file called :file:`bem/watershed/ws.mgz` which contains the brain MRI
 volume. Furthermore, ``mne watershed_bem`` script converts the scalp surface to
 fif format and saves the result to :file:`bem/{<subject>}-head.fif`.
 
+.. _bem_flash_algorithm:
 
 Using FLASH images
 ~~~~~~~~~~~~~~~~~~
@@ -54,8 +51,7 @@ reconstructions but it is strongly recommended that they are collected at the
 same time with the MPRAGEs or at least with the same scanner. For easy
 co-registration, the images should have FOV, matrix, slice thickness, gap, and
 slice orientation as the MPRAGE data. For information on suitable pulse
-sequences, see reference [B. Fischl *et al.* and J. Jovicich *et al.*, 2006] in
-:ref:`CEGEGDEI`.
+sequences, see :footcite:t:`FischlEtAl2004`.
 
 Creation of the BEM meshes using this method involves the following steps:
 
