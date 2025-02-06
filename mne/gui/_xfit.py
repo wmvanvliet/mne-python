@@ -21,7 +21,12 @@ from ..dipole import Dipole, fit_dipole
 from ..forward import convert_forward_solution, make_field_map, make_forward_dipole
 from ..minimum_norm import apply_inverse, make_inverse_operator
 from ..surface import _normal_orth
-from ..transforms import _get_trans, _get_transforms_to_coord_frame, apply_trans
+from ..transforms import (
+    _get_trans,
+    _get_transforms_to_coord_frame,
+    apply_trans,
+    invert_transform,
+)
 from ..utils import _check_option, fill_doc, logger, verbose
 from ..viz import EvokedField, create_3d_figure
 from ..viz._3d import _plot_head_surface, _plot_sensors_3d
@@ -208,6 +213,7 @@ class DipoleFitUI:
         self._subject = subject
         self._time_line = None
         self._head_mri_t = head_mri_t
+        self._mri_head_t = invert_transform(head_mri_t)
         self._to_cf_t = to_cf_t
         self._rank = rank
         self._verbose = verbose
@@ -215,6 +221,9 @@ class DipoleFitUI:
         # Configure the GUI.
         self._renderer = self._configure_main_display()
         self._configure_dock()
+
+        if stc is not None:
+            self._fig._renderer.plotter.pickable_actors = self._actors["brain"]
 
     @property
     def dipoles(self):
@@ -232,13 +241,15 @@ class DipoleFitUI:
                 subjects_dir=self._subjects_dir,
                 surface="white",
                 hemi="both",
-                time_viewer=False,
+                time_viewer=True,
+                show_traces=False,
                 initial_time=self._current_time,
                 brain_kwargs=dict(units="m"),
                 figure=fig,
             )
             fig = self._fig_stc
             self._actors["brain"] = fig._actors["data"]
+            subscribe(fig, "vertex_select", self._on_vertex_select)
 
         fig = EvokedField(
             self._evoked,
@@ -410,6 +421,12 @@ class DipoleFitUI:
             self._renderer._mplcanvas.update_plot()
         self._update_arrows()
 
+    def _on_vertex_select(self, event):
+        pos = self._fig_stc.geo[event.hemi].coords[event.vertex_id]
+        pos_head = apply_trans(self._mri_head_t, pos)
+        print("MRI:", pos, "HEAD:", pos_head)
+        self._on_fit_dipole(pos=pos_head)
+
     def _on_sensor_data(self):
         """Show sensor data and allow sensor selection."""
         if self._fig_sensors is not None:
@@ -438,7 +455,7 @@ class DipoleFitUI:
                     act.prop.SetColor(1, 1, 1)
         self._renderer._update()
 
-    def _on_fit_dipole(self):
+    def _on_fit_dipole(self, *, pos=None):
         """Fit a single dipole."""
         evoked_picked = self._evoked.copy()
         cov_picked = self._cov.copy().as_diag()  # FIXME: as_diag necessary?
@@ -456,6 +473,7 @@ class DipoleFitUI:
             cov_picked,
             self._bem,
             trans=self._head_mri_t,
+            pos=pos,
             rank=self._rank,
             verbose=False,
         )[0]

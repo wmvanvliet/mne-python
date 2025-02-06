@@ -1089,6 +1089,7 @@ class Brain:
             self._on_pick,
         )
         subscribe(self, "vertex_select", self._on_vertex_select)
+        print("setup picking")
 
     def _configure_tool_bar(self):
         if not hasattr(self._renderer, "_tool_bar") or self._renderer._tool_bar is None:
@@ -1217,8 +1218,8 @@ class Brain:
         self._mouse_no_mvt = 0
 
     def _on_pick(self, vtk_picker, event):
-        if not self.show_traces:
-            return
+        # if not self.show_traces:
+        #     return
 
         # vtk_picker is a vtkCellPicker
         cell_id = vtk_picker.GetCellId()
@@ -1340,6 +1341,8 @@ class Brain:
 
     def _on_vertex_select(self, event):
         """Respond to vertex_select UI event."""
+        if not getattr(self, "_show_traces", False):
+            return
         if event.hemi == "vol":
             try:
                 mesh = self._data[event.hemi]["grid"]
