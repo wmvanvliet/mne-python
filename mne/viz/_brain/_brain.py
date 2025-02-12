@@ -1089,7 +1089,6 @@ class Brain:
             self._on_pick,
         )
         subscribe(self, "vertex_select", self._on_vertex_select)
-        print("setup picking")
 
     def _configure_tool_bar(self):
         if not hasattr(self._renderer, "_tool_bar") or self._renderer._tool_bar is None:
@@ -1341,7 +1340,7 @@ class Brain:
 
     def _on_vertex_select(self, event):
         """Respond to vertex_select UI event."""
-        if not getattr(self, "_show_traces", False):
+        if not getattr(self, "show_traces", False):
             return
         if event.hemi == "vol":
             try:
@@ -1908,6 +1907,7 @@ class Brain:
         self._data["fmin"] = fmin
         self._data["fmid"] = fmid
         self._data["fmax"] = fmax
+        print(f"{fmax=}")
         self._update_colormap_range()
 
         # 1) add the surfaces first
@@ -4110,7 +4110,11 @@ def _get_range(brain):
     multiplied by the scaling factor and when getting a value, this value
     should be divided by the scaling factor.
     """
-    fmax = abs(brain._data["fmax"])
+    fmax = 0
+    if "lh" in brain._data:
+        fmax = max(fmax, abs(brain._data["lh"]["array"]).max())
+    if "rh" in brain._data:
+        fmax = max(fmax, abs(brain._data["rh"]["array"]).max())
     if 1e-02 <= fmax <= 1e02:
         fscale_power = 0
     else:
