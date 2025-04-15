@@ -151,6 +151,9 @@ class DipoleFitUI:
         n_jobs=None,
         verbose=None,
     ):
+        if isinstance(evoked, list):
+            self._conditions = evoked
+            evoked = evoked[0]
         if cov is None:
             cov = make_ad_hoc_cov(evoked.info)
         elif cov == "baseline":
@@ -370,6 +373,12 @@ class DipoleFitUI:
 
         # Right dock
         r._dock_initialize(name="Dipole fitting", area="right")
+        r._dock_add_combo_box(
+            "Condition",
+            value=self._evoked.comment,
+            rng=[c.comment for c in self._conditions],
+            callback=self._on_select_condition,
+        )
         r._dock_add_button("Sensor data", self._on_sensor_data)
         r._dock_add_button("Fit dipole", self._on_fit_dipole)
         methods = ["Multi dipole (MNE)", "Single dipole"]
@@ -771,6 +780,10 @@ class DipoleFitUI:
         """Select the method to use for multi-dipole timecourse fitting."""
         self._multi_dipole_method = method
         self._fit_timecourses()
+
+    def _on_select_condition(self, condition):
+        """Select the evoked which timecourses to use."""
+        print("Setting condition to:", condition)
 
     def _on_dipole_toggle(self, active, dip_num):
         """Toggle a dipole on or off."""
