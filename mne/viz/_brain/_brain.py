@@ -1227,23 +1227,20 @@ class Brain:
         # 1) Check to see if there are any spheres along the ray
         if len(self._spheres):
             collection = vtk_picker.GetProp3Ds()
-            found_sphere = None
             for ii in range(collection.GetNumberOfItems()):
                 actor = collection.GetItemAsObject(ii)
                 for sphere in self._spheres:
-                    if any(a is actor for a in sphere._actors):
-                        found_sphere = sphere
-                        break
-                if found_sphere is not None:
-                    break
-            if found_sphere is not None:
-                assert found_sphere._is_glyph
-                mesh = found_sphere
+                    if any(a is actor for a in sphere["actors"]):
+                        assert sphere["is_glyph"]
+                        self._remove_vertex_glyph(sphere)
+                        return
 
         # 2) Remove sphere if it's what we have
-        if hasattr(mesh, "_is_glyph"):
-            self._remove_vertex_glyph(mesh)
-            return
+        for sphere in self._spheres:
+            if sphere["mesh"] is mesh:
+                assert sphere["is_glyph"]
+                self._remove_vertex_glyph(sphere)
+                return
 
         # 3) Otherwise, pick the objects in the scene
         for hemi, this_mesh in self._layered_meshes.items():
@@ -1404,7 +1401,7 @@ class Brain:
         row, col = self._renderer._index_to_loc(rindex)
 
         actors = list()
-        spheres = list()
+        meshes = list()
         for _ in self._iter_views(hemi):
             # Using _sphere() instead of renderer.sphere() for 2 reasons:
             # 1) renderer.sphere() fails on Windows in a scenario where a lot
@@ -1412,37 +1409,43 @@ class Brain:
             #    mitigated with synchronization/delay?)
             # 2) the glyph filter is used in renderer.sphere() but only one
             #    sphere is required in this function.
-            actor, sphere = self._renderer._sphere(
+            actor, mesh = self._renderer._sphere(
                 center=np.array(center),
                 color=color,
                 radius=4.0,
             )
             actors.append(actor)
-            spheres.append(sphere)
+            meshes.append(mesh)
 
-        # add metadata for picking
-        for sphere in spheres:
-            sphere._is_glyph = True
-            sphere._hemi = hemi
-            sphere._line = line
-            sphere._actors = actors
-            sphere._color = color
-            sphere._vertex_id = vertex_id
+        # Store mesh with metadata for picking.
+        spheres = list()
+        for mesh in meshes:
+            spheres.append(
+                dict(
+                    mesh=mesh,
+                    actors=actors,
+                    is_glyph=True,
+                    hemi=hemi,
+                    line=line,
+                    color=color,
+                    vertex_id=vertex_id,
+                )
+            )
 
         self.picked_points[hemi].append(vertex_id)
         self._spheres.extend(spheres)
         self.pick_table[vertex_id] = spheres
-        return sphere
+        return mesh
 
-    def _remove_vertex_glyph(self, mesh, render=True):
-        vertex_id = mesh._vertex_id
+    def _remove_vertex_glyph(self, sphere, render=True):
+        vertex_id = sphere["vertex_id"]
         if vertex_id not in self.pick_table:
             return
 
-        hemi = mesh._hemi
-        color = mesh._color
+        hemi = sphere["hemi"]
+        color = sphere["color"]
         spheres = self.pick_table[vertex_id]
-        spheres[0]._line.remove()
+        spheres[0]["line"].remove()
         self.mpl_canvas.update_plot()
         self.picked_points[hemi].remove(vertex_id)
 
@@ -1453,8 +1456,8 @@ class Brain:
             self.color_cycle.restore(color)
         for sphere in spheres:
             # remove all actors
-            self.plotter.remove_actor(sphere._actors, render=False)
-            sphere._actors = None
+            self.plotter.remove_actor(sphere["actors"], render=False)
+            sphere["actors"] = None
             self._spheres.pop(self._spheres.index(sphere))
         if render:
             self._renderer._update()

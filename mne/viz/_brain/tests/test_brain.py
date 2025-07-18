@@ -1124,9 +1124,9 @@ def test_brain_traces(renderer_interactive_pyvistaqt, hemi, src, tmp_path, brain
         assert picked_points[current_hemi][0] == test_picker.point_id
         assert len(spheres) > 0
         sphere = spheres[-1]
-        vertex_id = sphere._vertex_id
+        vertex_id = sphere["vertex_id"]
         assert vertex_id == test_picker.point_id
-        line = sphere._line
+        line = sphere["line"]
 
         hemi_prefix = current_hemi[0].upper()
         if current_hemi == "vol":
@@ -1148,7 +1148,7 @@ def test_brain_traces(renderer_interactive_pyvistaqt, hemi, src, tmp_path, brain
 
         # remove the sphere by clicking in its vicinity
         old_len = len(spheres)
-        test_picker._actors = sum((s._actors for s in spheres), [])
+        test_picker._actors = sum((s["actors"] for s in spheres), [])
         brain._on_pick(test_picker, None)
         assert len(spheres) < old_len
 
