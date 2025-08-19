@@ -14,7 +14,7 @@ from scipy.linalg import eigh
 from scipy.optimize import fmin_cobyla
 
 from ._fiff.constants import FIFF
-from ._fiff.pick import pick_types
+from ._fiff.pick import _picks_to_idx, pick_types
 from ._fiff.proj import _needs_eeg_average_ref_proj, make_projector
 from ._freesurfer import _get_aseg, head_to_mni, head_to_mri, read_freesurfer_lut
 from .bem import _bem_find_surface, _bem_surf_name, _fit_sphere
@@ -1301,6 +1301,11 @@ def _sphere_constraint(r0, R_adj):
     return constraint
 
 
+def _no_constraint(rd):
+    """No constraint on dipole location."""
+    return 1
+
+
 def _fit_dipole(
     min_dist_to_inner_skull,
     B_orig,
@@ -1840,6 +1845,439 @@ def fit_dipole(
     residual.data[picks] = np.dot(proj_op, out[-1])
     logger.info("%d time points fitted", len(dipoles.times))
     return dipoles, residual
+
+
+class DipoleFitter:
+    """Fit dipoles to MEG and EEG data.
+
+    Parameters
+    ----------
+    cov : str | instance of Covariance
+        The noise covariance.
+    bem : path-like | instance of ConductorModel
+        The BEM filename (str) or conductor model.
+    trans : path-like | None
+        The head<->MRI transform filename. Must be provided unless BEM is a sphere
+        model.
+    min_dist : float
+        Minimum distance (in millimeters) from the dipole to the inner skull. Must be
+        positive. Note that because this is a constraint passed to a solver it is not
+        strict but close, i.e. for a ``min_dist=5.`` the fits could be 4.9 mm from the
+        inner skull.
+    %(rank_none)s
+    accuracy : str
+        Can be ``"normal"`` (default) or ``"accurate"``, which gives the most
+        accurate coil definition but is typically not necessary for real-world
+        data.
+    tol : float
+        Final accuracy of the optimization (see ``rhoend`` argument of
+        :func:`scipy.optimize.fmin_cobyla`).
+    %(n_jobs)s
+        The number of CPU cores used during field computation and fitting.
+    %(verbose)s
+
+    See Also
+    --------
+    Dipole
+    DipoleFixed
+    fit_dipole
+    mne.beamformer.rap_music
+    read_dipole
+
+    Notes
+    -----
+    .. versionadded:: 1.11
+    """
+
+    @verbose
+    def __init__(
+        self,
+        *,
+        info,
+        cov,
+        bem,
+        trans=None,
+        min_dist=5.0,
+        n_jobs=None,
+        pos=None,
+        ori=None,
+        rank=None,
+        accuracy="normal",
+        tol=5e-5,
+        verbose=None,
+    ):
+        _validate_type(accuracy, str, "accuracy")
+        _check_option("accuracy", accuracy, ("accurate", "normal"))
+
+        if min_dist < 0:
+            raise ValueError(f"min_dist should be positive. Got {min_dist}")
+        # Convert the min_dist to meters
+        self._min_dist_to_inner_skull = min_dist / 1000.0
+        del min_dist
+        self._accuracy = accuracy
+        self._n_jobs = n_jobs
+        self._tol = tol
+
+        # Figure out our inputs
+        neeg = len(pick_types(info, meg=False, eeg=True, ref_meg=False, exclude=[]))
+        if isinstance(bem, str):
+            bem_extra = bem
+        else:
+            bem_extra = repr(bem)
+            logger.info(f"BEM               : {bem_extra}")
+        self.mri_head_t, trans = _get_trans(trans)
+        logger.info(f"MRI transform     : {trans}")
+        safe_false = _verbose_safe_false()
+        self.bem = _setup_bem(bem, bem_extra, neeg, self.mri_head_t, verbose=safe_false)
+        if not self.bem["is_sphere"]:
+            # Find the best-fitting sphere
+            inner_skull = _bem_find_surface(self.bem, "inner_skull")
+            inner_skull = inner_skull.copy()
+            R, r0 = _fit_sphere(inner_skull["rr"])
+            # r0 back to head frame for logging
+            r0 = apply_trans(self.mri_head_t["trans"], r0[np.newaxis, :])[0]
+            inner_skull["r0"] = r0
+            logger.info(
+                f"Head origin       : {1000 * r0[0]:6.1f} {1000 * r0[1]:6.1f} "
+                f"{1000 * r0[2]:6.1f} mm rad = {1000 * R:6.1f} mm."
+            )
+            del R, r0
+        else:
+            r0 = self.bem["r0"]
+            if len(self.bem.get("layers", [])) > 0:
+                R = self.bem["layers"][0]["rad"]
+                kind = "rad"
+            else:  # MEG-only
+                # Use the minimum distance to the MEG sensors as the radius then
+                R = np.dot(
+                    np.linalg.inv(info["dev_head_t"]["trans"]), np.hstack([r0, [1.0]])
+                )[:3]  # r0 -> device
+                R = R - [
+                    info["chs"][pick]["loc"][:3]
+                    for pick in pick_types(info, meg=True, exclude=[])
+                ]
+                if len(R) == 0:
+                    raise RuntimeError(
+                        "No MEG channels found, but MEG-only sphere model used"
+                    )
+                R = np.min(np.sqrt(np.sum(R * R, axis=1)))  # use dist to sensors
+                kind = "max_rad"
+            logger.info(
+                "Sphere model      : "
+                f"origin at ({1000 * r0[0]: 7.2f} "
+                f"{1000 * r0[1]: 7.2f} "
+                f"{1000 * r0[2]: 7.2f}) mm, "
+                f"{kind} = {R:6.1f} mm"
+            )
+            inner_skull = dict(R=R, r0=r0)  # NB sphere model defined in head frame
+            del R, r0
+
+        # inner_skull goes from mri to head frame
+        if "rr" in inner_skull:
+            transform_surface_to(inner_skull, "head", self.mri_head_t)
+        self.inner_skull = inner_skull
+
+        _print_coord_trans(self.mri_head_t)
+        _print_coord_trans(info["dev_head_t"])
+        logger.info(f"{len(info['bads'])} bad channels total")
+
+        # Forward model setup (setup_forward_model from setup.c)
+        ch_types = info.get_channel_types()
+
+        sensors = dict()
+        if "grad" in ch_types or "mag" in ch_types:
+            sensors["meg"] = _prep_meg_channels(
+                info, exclude="bads", accuracy=accuracy, verbose=verbose
+            )
+        if "eeg" in ch_types:
+            sensors["eeg"] = _prep_eeg_channels(info, exclude="bads", verbose=verbose)
+
+        # Ensure that MEG and/or EEG channels are present
+        if len(sensors) == 0:
+            raise RuntimeError("No MEG or EEG channels found.")
+        self.sensors = sensors
+
+        # Whitener for the data
+        logger.info("Decomposing the sensor noise covariance matrix...")
+        self._picks = pick_types(info, meg=True, eeg=True, ref_meg=False)
+        self._cov = _ensure_cov(cov)
+        self._whitener, _, self._rank = compute_whitener(
+            self._cov, info, picks=self._picks, rank=rank, return_rank=True
+        )
+        self._info = info
+
+        # In case we want to more closely match MNE-C for debugging:
+        # from ._fiff.pick import pick_info
+        # from .cov import prepare_noise_cov
+        # info_nb = pick_info(info, self._picks)
+        # cov = prepare_noise_cov(cov, info_nb, info_nb['ch_names'], verbose=False)
+        # nzero = (cov['eig'] > 0)
+        # n_chan = len(info_nb['ch_names'])
+        # whitener = np.zeros((n_chan, n_chan), dtype=np.float64)
+        # whitener[nzero, nzero] = 1.0 / np.sqrt(cov['eig'][nzero])
+        # whitener = np.dot(whitener, cov['eigvec'])
+
+    def init_grid(self, *, guess_grid=0.02, guess_mindist=None, guess_exclude=0.02):
+        """Initialize the guessing grid."""
+        guess_grid = 0.02  # MNE-C uses 0.01, but this is faster w/similar perf
+        if guess_mindist is None:
+            guess_mindist = max(0.005, self._min_dist_to_inner_skull)
+        guess_exclude = 0.02
+
+        logger.info(f"Guess grid        : {1000 * guess_grid:6.1f} mm")
+        if guess_mindist > 0.0:
+            logger.info(f"Guess mindist     : {1000 * guess_mindist:6.1f} mm")
+        if guess_exclude > 0:
+            logger.info(f"Guess exclude     : {1000 * guess_exclude:6.1f} mm")
+        logger.info(f"Using {self._accuracy} MEG coil definitions.")
+
+        logger.info("")
+
+        logger.info("\n---- Computing the forward solution for the guesses...")
+        self._guess_src = _make_guesses(
+            self.inner_skull,
+            guess_grid,
+            guess_exclude,
+            guess_mindist,
+            n_jobs=self._n_jobs,
+        )[0]
+        # grid coordinates go from mri to head frame
+        transform_surface_to(self._guess_src, "head", self.mri_head_t)
+        logger.info("Go through all guess source locations...")
+
+        # C code computes guesses w/sphere model for speed, don't bother here
+        safe_false = _verbose_safe_false()
+        self._fwd_data = _prep_field_computation(
+            self._guess_src["rr"],
+            sensors=self.sensors,
+            bem=self.bem,
+            n_jobs=self._n_jobs,
+            verbose=safe_false,
+        )
+        self._fwd_data["inner_skull"] = self.inner_skull
+        guess_fwd, guess_fwd_orig, guess_fwd_scales = _dipole_forwards(
+            sensors=self.sensors,
+            fwd_data=self._fwd_data,
+            whitener=self._whitener,
+            rr=self._guess_src["rr"],
+            n_jobs=self._n_jobs,
+        )
+        # decompose ahead of time
+        guess_fwd_svd = [
+            _safe_svd(fwd, full_matrices=False)
+            for fwd in np.array_split(guess_fwd, len(self._guess_src["rr"]))
+        ]
+        self._guess_data = dict(
+            fwd=guess_fwd,
+            fwd_svd=guess_fwd_svd,
+            fwd_orig=guess_fwd_orig,
+            scales=guess_fwd_scales,
+        )
+        del guess_fwd, guess_fwd_svd, guess_fwd_orig, guess_fwd_scales  # destroyed
+        logger.info(
+            "[done %d source%s]", self._guess_src["nuse"], _pl(self._guess_src["nuse"])
+        )
+
+    @fill_doc
+    def fit(self, evoked, *, pos=None, ori=None, picks=None, rank="info"):
+        """Fit a dipole.
+
+        Parameters
+        ----------
+        evoked : instance of Evoked
+            The dataset to fit the dipole to.
+        pos : ndarray, shape (3,) | None
+            Position of the dipole to use. If None (default), sequential fitting
+            (different position and orientation for each time instance) is performed. If
+            a position (in head coords) is given as an array, the position is fixed
+            during fitting.
+        ori : ndarray, shape (3,) | None
+            Orientation of the dipole to use. If None (default), the orientation is free
+            to change as a function of time. If an orientation (in head coordinates) is
+            given as an array, ``pos`` must also be provided, and the routine computes
+            the amplitude and goodness of fit of the dipole at the given position and
+            orientation for each time instant.
+        %(picks_good_data)s
+        %(rank)s
+
+
+        Returns
+        -------
+        dip : instance of Dipole or DipoleFixed
+            The dipole fits. A :class:`mne.DipoleFixed` is returned if ``pos`` and
+            ``ori`` are both not None, otherwise a :class:`mne.Dipole` is returned.
+        residual : instance of Evoked
+            The M-EEG data channels with the fitted dipolar activity removed.
+        """
+        if ori is not None and pos is None:
+            raise ValueError("pos must be provided if ori is not None")
+
+        # This could eventually be adapted to work with other inputs, these are what is
+        # needed:
+        evoked = evoked.copy()
+        info = evoked.info  # TODO: test compatibility with self.info
+        times = evoked.times.copy()
+        comment = evoked.comment
+
+        # Determine if a list of projectors has an average EEG ref.
+        if _needs_eeg_average_ref_proj(evoked.info):
+            raise ValueError("EEG average reference is mandatory for dipole fitting.")
+
+        # Select channels.
+        if picks is not None:
+            picks = _picks_to_idx(info, picks, none="data", exclude="bads")
+            evoked = evoked.pick(picks)
+            info = evoked.info
+            info.normalize_proj()
+            cov = self._cov.copy().as_diag()  # FIXME: as_diag necessary?
+            cov = cov.pick_channels(evoked.ch_names, ordered=False)
+            cov["projs"] = info["projs"]
+            whitener, _, rank = compute_whitener(cov, info, rank=rank, return_rank=True)
+            picks = np.arange(evoked.data.shape[0])
+        else:
+            picks = self._picks
+            rank = self._rank
+            whitener = self._whitener
+
+        data = evoked.data
+        if not np.isfinite(data).all():
+            raise ValueError("Evoked data must be finite")
+
+        # Test the validity of the optional pre-defined dipole position.
+        if pos is not None:
+            fixed_position = True
+            pos = np.array(pos, float)
+            if pos.shape != (3,):
+                raise ValueError(
+                    f"pos must be None or a 3-element array-like, got {pos}"
+                )
+            logger.info(
+                "Fixed position    : {:6.1f} {:6.1f} {:6.1f} mm".format(
+                    *tuple(1000 * pos)
+                )
+            )
+            if ori is not None:
+                ori = np.array(ori, float)
+                if ori.shape != (3,):
+                    raise ValueError(
+                        f"oris must be None or a 3-element array-like, got {ori}"
+                    )
+                norm = np.sqrt(np.sum(ori * ori))
+                if not np.isclose(norm, 1):
+                    raise ValueError(f"ori must be a unit vector, got length {norm}")
+                logger.info(
+                    "Fixed orientation  : {:6.4f} {:6.4f} {:6.4f} mm".format(
+                        *tuple(ori)
+                    )
+                )
+            else:
+                logger.info("Free orientation   : <time-varying>")
+            fit_n_jobs = 1  # only use 1 job to do the guess fitting
+
+            if "rr" in self.inner_skull:
+                check = _surface_constraint(
+                    self.inner_skull, self._min_dist_to_inner_skull
+                )(pos)
+            else:
+                check = _sphere_constraint(
+                    self.inner_skull["r0"],
+                    R_adj=self.inner_skull["R"] - self._min_dist_to_inner_skull,
+                )(pos)
+            if check <= 0:
+                raise ValueError(
+                    f"fixed position is {-1000 * check:0.1f}mm outside the inner skull "
+                    "boundary"
+                )
+            guess_src = dict(nuse=1, rr=pos[np.newaxis], inuse=np.array([True]))
+        else:
+            fixed_position = False
+            fit_n_jobs = self._n_jobs
+            guess_src = self._guess_src
+
+        # Do actual dipole fitting.
+        data = data[picks]
+        ch_names = [info["ch_names"][p] for p in picks]
+        proj_op = make_projector(info["projs"], ch_names, info["bads"])[0]
+        fun = _fit_dipole_fixed if fixed_position else _fit_dipole
+        out = _fit_dipoles(
+            fun,
+            self._min_dist_to_inner_skull,
+            data,
+            times,
+            guess_src["rr"],
+            self._guess_data,
+            sensors=self.sensors,
+            fwd_data=self._fwd_data,
+            whitener=whitener,
+            ori=ori,
+            n_jobs=fit_n_jobs,
+            rank=rank,
+            rhoend=self._tol,
+        )
+        assert len(out) == 8
+        if fixed_position and ori is not None:
+            # DipoleFixed
+            data = np.array([out[1], out[3]])
+            out_info = deepcopy(info)
+            loc = np.concatenate([pos, ori, np.zeros(6)])
+            out_info._unlocked = True
+            out_info["chs"] = [
+                dict(
+                    ch_name="dip 01",
+                    loc=loc,
+                    kind=FIFF.FIFFV_DIPOLE_WAVE,
+                    coord_frame=FIFF.FIFFV_COORD_UNKNOWN,
+                    unit=FIFF.FIFF_UNIT_AM,
+                    coil_type=FIFF.FIFFV_COIL_DIPOLE,
+                    unit_mul=0,
+                    range=1,
+                    cal=1.0,
+                    scanno=1,
+                    logno=1,
+                ),
+                dict(
+                    ch_name="goodness",
+                    loc=np.full(12, np.nan),
+                    kind=FIFF.FIFFV_GOODNESS_FIT,
+                    unit=FIFF.FIFF_UNIT_AM,
+                    coord_frame=FIFF.FIFFV_COORD_UNKNOWN,
+                    coil_type=FIFF.FIFFV_COIL_NONE,
+                    unit_mul=0,
+                    range=1.0,
+                    cal=1.0,
+                    scanno=2,
+                    logno=100,
+                ),
+            ]
+            for key in ["hpi_meas", "hpi_results", "projs"]:
+                out_info[key] = list()
+            for key in [
+                "acq_pars",
+                "acq_stim",
+                "description",
+                "dig",
+                "experimenter",
+                "hpi_subsystem",
+                "proj_id",
+                "proj_name",
+                "subject_info",
+            ]:
+                out_info[key] = None
+            out_info._unlocked = False
+            out_info["bads"] = []
+            out_info._update_redundant()
+            out_info._check_consistency()
+            dipoles = DipoleFixed(
+                out_info, data, times, evoked.nave, evoked._aspect_kind, comment=comment
+            )
+        else:
+            dipoles = Dipole(
+                times, out[0], out[1], out[2], out[3], comment, out[4], out[5], out[6]
+            )
+        residual = evoked.copy().apply_proj()  # set the projs active
+        residual.data[picks] = np.dot(proj_op, out[-1])
+        logger.info("%d time points fitted", len(dipoles.times))
+        return dipoles, residual
 
 
 # Every other row of Table 3 from OyamaEtAl2015

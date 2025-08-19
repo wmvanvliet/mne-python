@@ -17,7 +17,7 @@ from ..bem import (
     make_sphere_model,
 )
 from ..cov import make_ad_hoc_cov
-from ..dipole import Dipole, fit_dipole
+from ..dipole import Dipole, DipoleFitter
 from ..forward import convert_forward_solution, make_field_map, make_forward_dipole
 from ..minimum_norm import apply_inverse, make_inverse_operator
 from ..surface import _normal_orth
@@ -156,6 +156,18 @@ class DipoleFitUI:
         self._rank = rank
         self._verbose = verbose
         self._n_jobs = n_jobs
+
+        # Setup dipole fitting algorithm.
+        self.fitter = DipoleFitter(
+            info=self._evoked.info,
+            cov=self._cov,
+            bem=self._bem,
+            trans=self._head_mri_t,
+            rank=self._rank,
+            n_jobs=self._n_jobs,
+            verbose=True,
+        )
+        self.fitter.init_grid()
 
         # Configure the GUI.
         self._renderer = self._configure_main_display(show)
@@ -392,24 +404,15 @@ class DipoleFitUI:
     def _on_fit_dipole(self):
         """Fit a single dipole."""
         evoked_picked = self._evoked.copy()
-        cov_picked = self._cov.copy().as_diag()  # FIXME: as_diag necessary?
+        evoked_picked.crop(self._current_time, self._current_time)
         if self._fig_sensors is not None:
             picks = self._fig_sensors.lasso.selection
-            if len(picks) > 0:
-                evoked_picked = evoked_picked.pick(picks)
-                evoked_picked.info.normalize_proj()
-                cov_picked = cov_picked.pick_channels(picks, ordered=False)
-                cov_picked["projs"] = evoked_picked.info["projs"]
-        evoked_picked.crop(self._current_time, self._current_time)
+        else:
+            picks = None
 
-        dip = fit_dipole(
+        dip = self.fitter.fit(
             evoked_picked,
-            cov_picked,
-            self._bem,
-            trans=self._head_mri_t,
-            rank=self._rank,
-            n_jobs=self._n_jobs,
-            verbose=False,
+            picks=picks,
         )[0]
 
         self.add_dipole(dip)
@@ -601,16 +604,11 @@ class DipoleFitUI:
                     dip["orientation"] = orientations[i]
         elif self._multi_dipole_method == "Single dipole":
             for dip in active_dips:
-                dip_with_timecourse, _ = fit_dipole(
+                dip_with_timecourse, _ = self.fitter.fit(
                     self._evoked,
                     self._cov,
-                    self._bem,
                     pos=dip["dip"].pos[0],  # position is always fixed
                     ori=dip["dip"].ori[0] if dip["fix_ori"] else None,
-                    trans=self._head_mri_t,
-                    rank=self._rank,
-                    n_jobs=self._n_jobs,
-                    verbose=False,
                 )
                 if dip["fix_ori"]:
                     dip["timecourse"] = dip_with_timecourse.data[0]
