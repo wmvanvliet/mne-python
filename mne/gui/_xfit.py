@@ -9,20 +9,26 @@ from pathlib import Path
 import numpy as np
 import pyvista
 
-from .. import pick_types
+from .._fiff.pick import pick_types
 from ..bem import (
     ConductorModel,
     _ensure_bem_surfaces,
     fit_sphere_to_headshape,
     make_sphere_model,
 )
-from ..cov import make_ad_hoc_cov
+from ..cov import _ensure_cov, make_ad_hoc_cov
 from ..dipole import Dipole, DipoleFitter
+from ..evoked import Evoked, read_evokeds
 from ..forward import convert_forward_solution, make_field_map, make_forward_dipole
 from ..minimum_norm import apply_inverse, make_inverse_operator
+from ..source_estimate import (
+    SourceEstimate,
+    _BaseSurfaceSourceEstimate,
+    read_source_estimate,
+)
 from ..surface import _normal_orth
 from ..transforms import _get_trans, _get_transforms_to_coord_frame, apply_trans
-from ..utils import _check_option, fill_doc, logger, verbose
+from ..utils import _check_option, _validate_type, fill_doc, logger, verbose
 from ..viz import EvokedField, create_3d_figure
 from ..viz._3d import _plot_head_surface, _plot_sensors_3d
 from ..viz.backends._utils import _qt_app_exec
@@ -36,8 +42,14 @@ class DipoleFitUI:
 
     Parameters
     ----------
-    evoked : instance of Evoked
+    evoked : instance of Evoked | path-like
         Evoked data to show fieldmap of and fit dipoles to.
+    condition : int | str
+        When ``evoked`` is given as a filename, use this to select which evoked to use
+        in the file by either specifying the index or the string comment field of the
+        evoked. By default, the first evoked is used.
+    %(baseline_evoked)s
+        Defaults to ``(None, 0)``, i.e. beginning of the the data until time point zero.
     cov : instance of Covariance | "baseline" | None
         Noise covariance matrix. If ``None``, an ad-hoc covariance matrix is used with
         default values for the diagonal elements (see Notes). If ``"baseline"``, the
@@ -64,6 +76,10 @@ class DipoleFitUI:
         Type of channels to use for the dipole fitting. By default (``None``) both MEG
         and EEG channels will be used.
     %(n_jobs)s
+    show : bool
+        Show the GUI if True.
+    block : bool
+        Whether to halt program execution until the figure is closed.
     %(verbose)s
 
     Notes
@@ -74,7 +90,10 @@ class DipoleFitUI:
 
     def __init__(
         self,
-        evoked,
+        evoked=None,
+        *,
+        condition=0,
+        baseline=(None, 0),
         cov=None,
         bem=None,
         initial_time=None,
@@ -90,20 +109,36 @@ class DipoleFitUI:
         block=False,
         verbose=None,
     ):
+        _validate_type(evoked, ("path-like", Evoked), "evoked")
+        if not isinstance(evoked, Evoked):
+            evoked = read_evokeds(evoked, condition=condition)
+        evoked.apply_baseline(baseline)
+
         if cov is None:
+            logger.info("Using ad-hoc noise covariance.")
             cov = make_ad_hoc_cov(evoked.info)
         elif cov == "baseline":
+            logger.info(
+                f"Estimating noise covariance from baseline ({evoked.baseline[0]:.3f} "
+                f"to {evoked.baseline[1]:.3f} seconds)."
+            )
             std = dict()
             for typ in set(evoked.get_channel_types(only_data_chs=True)):
                 baseline = evoked.copy().pick(typ).crop(*evoked.baseline)
                 std[typ] = baseline.data.std(axis=1).mean()
             cov = make_ad_hoc_cov(evoked.info, std)
+        else:
+            cov = _ensure_cov(cov)
+
         if bem is None:
             bem = make_sphere_model("auto", "auto", evoked.info)
         bem = _ensure_bem_surfaces(bem, extra_allow=(ConductorModel, None))
+
+        if ch_type is not None:
+            evoked = evoked.copy().pick(ch_type)
+
         field_map = make_field_map(
             evoked,
-            ch_type=ch_type,
             trans=trans,
             origin=bem["r0"] if bem["is_sphere"] else "auto",
             subject=subject,
@@ -118,7 +153,13 @@ class DipoleFitUI:
             initial_time = evoked.times[np.argmax(np.mean(data**2, axis=0))]
 
         if stc is not None:
-            if not np.allclose(stc.times, evoked.times):
+            _validate_type(stc, ("path-like", _BaseSurfaceSourceEstimate), "stc")
+            if not isinstance(stc, _BaseSurfaceSourceEstimate):
+                stc = read_source_estimate(stc)
+
+            if len(stc.times) != len(evoked.times) or not np.allclose(
+                stc.times, evoked.times
+            ):
                 raise ValueError(
                     "The time samples of the source estimate do not match those of the "
                     "evoked data."
@@ -190,17 +231,19 @@ class DipoleFitUI:
 
         self._fig_stc = None
         if self._stc is not None:
-            self._fig_stc = self._stc.plot(
+            kwargs = dict(
                 subject=self._subject,
                 subjects_dir=self._subjects_dir,
-                surface="white",
                 hemi="both",
                 time_viewer=False,
                 initial_time=self._current_time,
                 brain_kwargs=dict(units="m"),
                 figure=fig,
             )
-            fig = self._fig_stc
+            if isinstance(self._stc, SourceEstimate):
+                kwargs["surface"] = "white"
+            fig = self._stc.plot(**kwargs)  # overwrite "fig" to be the STC plot
+            self._fig_stc = fig
             self._actors["brain"] = fig._actors["data"]
 
         fig = EvokedField(
@@ -292,7 +335,7 @@ class DipoleFitUI:
             check_inside=None,
             nearest=None,
             sensor_colors=dict(
-                meg=["white" for _ in meg_picks],
+                meg=["gray" for _ in meg_picks],
                 eeg=["white" for _ in eeg_picks],
             ),
         )
@@ -332,15 +375,16 @@ class DipoleFitUI:
             callback=self._on_select_method,
         )
         self._dipole_box = r._dock_add_group_box(name="Dipoles")
-        r._dock_add_file_button(
+        self._save_button = r._dock_add_file_button(
             name="save_dipoles",
             desc="Save dipoles",
             save=True,
             func=self.save,
             tooltip="Save the dipoles to disk",
-            filter_="Dipole files (*.bdip)",
+            filter_="Dipole files (*.dip  *.bdip)",
             initial_directory=".",
         )
+        self._save_button.set_enabled(False)
         r._dock_add_stretch()
 
     def toggle_mesh(self, name, show=None):
@@ -403,8 +447,7 @@ class DipoleFitUI:
 
     def _on_fit_dipole(self):
         """Fit a single dipole."""
-        evoked_picked = self._evoked.copy()
-        evoked_picked.crop(self._current_time, self._current_time)
+        evoked_picked = self._evoked.copy().crop(self._current_time, self._current_time)
         if self._fig_sensors is not None:
             picks = self._fig_sensors.lasso.selection
         else:
@@ -417,7 +460,7 @@ class DipoleFitUI:
 
         self.add_dipole(dip)
 
-    def add_dipole(self, dipole):
+    def add_dipole(self, dipole, name=None):
         """Add a dipole (or multiple dipoles) to the GUI.
 
         Parameters
@@ -425,11 +468,37 @@ class DipoleFitUI:
         dipole : Dipole
             The dipole to add. If the ``Dipole`` object defines multiple dipoles, they
             will all be added.
+        name : str | list of str | None
+            The name of the dipole. When the ``Dipole`` object defines multiple dipoles,
+            this should be a list containing the name for each dipole. When ``None``,
+            the ``.name`` attribute of the ``Dipole`` object itself will be used.
         """
-        new_dipoles = list()
-        for dip_i in range(len(dipole)):
-            dip = dipole[dip_i]
+        _validate_type(name, (str, list, None), "name")
+        if isinstance(name, str):
+            names = [name]
+        elif name is None:
+            # Try to obtain names from `dipole.name`. When multiple dipoles are saved,
+            # the names are concatenated with `;` marks.
+            if dipole.name is None:
+                names = [None] * len(dipole)
+            elif len(dipole.name.split(";")) == len(dipole):
+                names = dipole.name.split(";")
+            else:
+                names = [dipole.name] * len(dipole)
+        else:
+            names = name
+        if len(names) != len(dipole):
+            raise ValueError(
+                f"Number of names ({len(names)}) does not match the number of dipoles "
+                f"({len(dipole)})."
+            )
 
+        # Ensure orientations are unit vectors. Due to rounding issues this is sometimes
+        # not the case.
+        dipole._ori /= np.linalg.norm(dipole._ori, axis=1, keepdims=True)
+
+        new_dipoles = list()
+        for dip, name in zip(dipole, names):
             # Coordinates needed to draw the big arrow on the helmet.
             helmet_coords, helmet_pos = self._get_helmet_coords(dip)
 
@@ -439,8 +508,10 @@ class DipoleFitUI:
                 dip_num = 0
             else:
                 dip_num = max(self._dipoles.keys()) + 1
-            if dip.name is None:
+            if name is None:
                 dip.name = f"dip{dip_num}"
+            else:
+                dip.name = name
             dip_color = colors[dip_num % len(colors)]
             if helmet_coords is not None:
                 arrow_mesh = pyvista.PolyData(*_arrow_mesh())
@@ -458,7 +529,7 @@ class DipoleFitUI:
                 helmet_coords=helmet_coords,
                 helmet_pos=helmet_pos,
                 num=dip_num,
-                fit_time=self._current_time,
+                # fit_time=self._current_time,
             )
             self._dipoles[dip_num] = dipole_dict
 
@@ -516,9 +587,9 @@ class DipoleFitUI:
                 color=dipole_dict["color"],
                 mag=0.05,
             )
-            if arrow_mesh is not None:
+            if dipole_dict["arrow_mesh"] is not None:
                 dipole_dict["helmet_arrow_actor"] = self._renderer.plotter.add_mesh(
-                    arrow_mesh,
+                    dipole_dict["arrow_mesh"],
                     color=dipole_dict["color"],
                     culling="front",
                 )
@@ -551,16 +622,13 @@ class DipoleFitUI:
     def _fit_timecourses(self):
         """Compute (or re-compute) dipole timecourses.
 
-        Called whenever a dipole is (de)-activated or the "Fix pos" box is toggled.
+        Called whenever something changes to the multi-dipole situation, i.e. a dipole
+        is added, removed, (de-)activated or the "Fix pos" box is toggled.
         """
+        self._save_button.set_enabled(len(self.dipoles) > 0)
         active_dips = [d for d in self._dipoles.values() if d["active"]]
         if len(active_dips) == 0:
             return
-
-        # Restrict the dipoles to only the time at which they were fitted.
-        for d in active_dips:
-            if len(d["dip"].times) > 1:
-                d["dip"] = d["dip"].crop(d["fit_time"], d["fit_time"])
 
         if self._multi_dipole_method == "Multi dipole (MNE)":
             fwd, _ = make_forward_dipole(
@@ -585,7 +653,7 @@ class DipoleFitUI:
                 self._evoked,
                 inv,
                 method="MNE",
-                lambda2=10 / len(active_dips),
+                lambda2=1e-6,
                 pick_ori="vector",
             )
 
@@ -650,23 +718,37 @@ class DipoleFitUI:
             or in ``'.bdip'`` to save in binary format.
         %(verbose)s
         """
-        logger.info("Saving dipoles as:")
+        if len(self.dipoles) == 0:
+            logger.info("No dipoles to save.")
+            return
+
+        logger.info(f"Saving dipoles as: {fname}")
         fname = Path(fname)
 
         # Pack the dipoles into a single mne.Dipole object.
+        if all(d.khi2 is not None for d in self.dipoles):
+            khi2 = np.array([d.khi2[0] for d in self.dipoles])
+        else:
+            khi2 = None
+
+        if all(d.nfree is not None for d in self.dipoles):
+            nfree = np.array([d.nfree[0] for d in self.dipoles])
+        else:
+            nfree = None
+
         dip = Dipole(
             times=np.array([d.times[0] for d in self.dipoles]),
             pos=np.array([d.pos[0] for d in self.dipoles]),
             amplitude=np.array([d.amplitude[0] for d in self.dipoles]),
             ori=np.array([d.ori[0] for d in self.dipoles]),
             gof=np.array([d.gof[0] for d in self.dipoles]),
-            khi2=np.array([d.khi2[0] for d in self.dipoles]),
-            nfree=np.array([d.nfree[0] for d in self.dipoles]),
+            khi2=khi2,
+            nfree=nfree,
             conf={
                 key: np.array([d.conf[key][0] for d in self.dipoles])
                 for key in self.dipoles[0].conf.keys()
             },
-            name=",".join(d.name for d in self.dipoles),
+            name=";".join(d.name if hasattr(d, "name") else "" for d in self.dipoles),
         )
         dip.save(fname, overwrite=True, verbose=verbose)
 
@@ -742,7 +824,8 @@ class DipoleFitUI:
         dipole = self._dipoles[dip_num]
         dipole["line_artist"].remove()
         dipole["brain_arrow_actor"].visibility = False
-        dipole["helmet_arrow_actor"].visibility = False
+        if dipole["helmet_arrow_actor"] is not None:  # no helmet arrow for EEG
+            dipole["helmet_arrow_actor"].visibility = False
         for widget in dipole["widgets"]:
             widget.hide()
         del self._dipoles[dip_num]
