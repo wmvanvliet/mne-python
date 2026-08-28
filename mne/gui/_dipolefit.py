@@ -20,8 +20,9 @@ from ..bem import (
 from ..cov import _ensure_cov, compute_whitener, make_ad_hoc_cov
 from ..dipole import Dipole, fit_dipole
 from ..evoked import Evoked
-from ..forward import convert_forward_solution, make_field_map
+from ..forward import make_field_map
 from ..forward._make_forward import _ForwardModeler
+from ..inverse_sparse import mixed_norm
 from ..minimum_norm import apply_inverse, make_inverse_operator
 from ..source_estimate import (
     SourceEstimate,
@@ -249,7 +250,7 @@ class DipoleFitUI:
         self._helmet_surf = None
         self._surf_maps = surf_maps
         self._fig_sensors = None
-        self._multi_dipole_method = "Multi dipole (MNE)"
+        self._multi_dipole_method = "Multi dipole (MxNE)"
         self._show_density = show_density
         self._stc = stc
         self._subjects_dir = subjects_dir
@@ -599,7 +600,7 @@ class DipoleFitUI:
         r._dock_initialize(name="Dipole fitting", area="right")
         r._dock_add_button("Sensor data", self._on_sensor_data)
         r._dock_add_button("Fit dipole", self.fit_dipole)
-        methods = ["Multi dipole (MNE)", "Single dipole"]
+        methods = ["Multi dipole (MxNE)", "Multi dipole (MNE)", "Single dipole"]
 
         @_auto_weakref
         def _on_select_method(method):
@@ -607,7 +608,7 @@ class DipoleFitUI:
 
         self._method_combo = r._dock_add_combo_box(
             "Dipole model",
-            value="Multi dipole (MNE)",
+            value="Multi dipole (MxNE)",
             rng=methods,
             callback=_on_select_method,
         )
@@ -1005,7 +1006,7 @@ class DipoleFitUI:
             # collapse to a single point in the discrete source space below, which
             # errors out. Ideal behavior unclear: merge them, or error informatively?
             this_src = setup_volume_source_space(
-                "sample",
+                self._subject,
                 pos=dict(
                     rr=apply_trans(
                         self._head_mri_t,
@@ -1018,12 +1019,26 @@ class DipoleFitUI:
                 ),
             )
             this_fwd = self.fwd.compute(this_src)
-            this_fwd = convert_forward_solution(this_fwd, surf_ori=False)
+            # this_fwd = convert_forward_solution(this_fwd, surf_ori=False)
 
-            if self._multi_dipole_method == "Multi dipole (MNE)":
+            if self._multi_dipole_method == "Multi dipole (MxNE)":
+                stc = mixed_norm(
+                    evoked=self._evoked,
+                    forward=this_fwd,
+                    noise_cov=self._cov,
+                    alpha=1,
+                    loose=0,
+                    depth=0,
+                    maxit=3000,
+                    tol=1e-4,
+                )
+                fixed_timecourses = stc.data
+                for i, dip in enumerate(active_dips):
+                    dip["timecourse"] = fixed_timecourses[i]
+                    dip["orientation"] = dip["dip"].ori.repeat(len(stc.times), axis=0)
+            elif self._multi_dipole_method == "Multi dipole (MNE)":
                 inv = make_inverse_operator(
                     self._evoked.info,
-                    # fwd,
                     this_fwd,
                     self._cov,
                     fixed=False,
@@ -1254,7 +1269,11 @@ class DipoleFitUI:
     # TODO: Need to expose a public method for setting the multi-dipole method
     def _on_select_method(self, method):
         """Select the method to use for multi-dipole timecourse fitting."""
-        _check_option("method", method, ("Multi dipole (MNE)", "Single dipole"))
+        _check_option(
+            "method",
+            method,
+            ("Multi dipole (MxNE)", "Multi dipole (MNE)", "Single dipole"),
+        )
         if method == self._multi_dipole_method:
             return
         self._multi_dipole_method = method
