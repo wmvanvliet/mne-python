@@ -835,6 +835,7 @@ def make_forward_dipole(
     sources = dict(rr=pos, nn=ori)
     # Dipole objects must be in the head frame
     src = _complete_vol_src([_make_discrete_source_space(sources, coord_frame="head")])
+    print(src[0]["nn"])
 
     # Forward operator created for channels in info (use pick_info to restrict)
     # Use defaults for most params, including min_dist

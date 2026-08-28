@@ -29,7 +29,7 @@ from ..source_estimate import (
     _BaseSurfaceSourceEstimate,
     read_source_estimate,
 )
-from ..source_space import setup_volume_source_space
+from ..source_space._source_space import _complete_vol_src, _make_discrete_source_space
 from ..surface import _normal_orth
 from ..transforms import _get_trans, _get_transforms_to_coord_frame, apply_trans
 from ..utils import (
@@ -837,10 +837,6 @@ class DipoleFitUI:
             return self._on_dipole_set_name(name, dip_num)
 
         @_auto_weakref
-        def _on_dipole_toggle_fix_orientation(fix, dip_num):
-            return self._on_dipole_toggle_fix_orientation(fix, dip_num)
-
-        @_auto_weakref
         def _on_dipole_delete(dip_num):
             return self._on_dipole_delete(dip_num)
 
@@ -875,12 +871,9 @@ class DipoleFitUI:
                 arrow_mesh=arrow_mesh,
                 color=dip_color,
                 dip=dip,
-                fix_ori=True,
-                fix_position=True,
                 helmet_coords=helmet_coords,
                 helmet_pos=helmet_pos,
                 num=dip_num,
-                # fit_time=self._current_time,
             )
             self._dipoles[dip_num] = dipole_dict
 
@@ -917,16 +910,6 @@ class DipoleFitUI:
             widgets[-1].set_hover_callbacks(
                 enter=partial(_on_dipole_hover, dip_num=dip_num, hover=True),
                 leave=partial(_on_dipole_hover, dip_num=dip_num, hover=False),
-            )
-            widgets.append(
-                r._dock_add_check_box(
-                    name="Fix ori",
-                    value=True,
-                    callback=partial(
-                        _on_dipole_toggle_fix_orientation, dip_num=dip_num
-                    ),
-                    layout=hlayout,
-                )
             )
             widgets.append(
                 r._dock_add_button(
@@ -1005,21 +988,19 @@ class DipoleFitUI:
             # TODO: When two active dipoles have (nearly) identical positions, they
             # collapse to a single point in the discrete source space below, which
             # errors out. Ideal behavior unclear: merge them, or error informatively?
-            this_src = setup_volume_source_space(
-                self._subject,
-                pos=dict(
-                    rr=apply_trans(
-                        self._head_mri_t,
-                        np.vstack([d["dip"].pos[0] for d in active_dips]),
-                    ),
-                    nn=apply_trans(
-                        self._head_mri_t,
-                        np.vstack([d["dip"].ori[0] for d in active_dips]),
-                    ),
-                ),
+            this_src = _complete_vol_src(
+                [
+                    _make_discrete_source_space(
+                        pos=dict(
+                            rr=np.vstack([d["dip"].pos[0] for d in active_dips]),
+                            nn=np.vstack([d["dip"].ori[0] for d in active_dips]),
+                        ),
+                        coord_frame="head",
+                    )
+                ]
             )
             this_fwd = self.fwd.compute(this_src)
-            # this_fwd = convert_forward_solution(this_fwd, surf_ori=False)
+            # this_fwd = convert_forward_solution(this_fwd, force_fixed=True, copy=True)
 
             if self._multi_dipole_method == "Multi dipole (MxNE)":
                 stc = mixed_norm(
@@ -1029,48 +1010,23 @@ class DipoleFitUI:
                     alpha=1,
                     loose=0,
                     depth=0,
-                    maxit=3000,
-                    tol=1e-4,
                 )
-                fixed_timecourses = stc.data
                 for i, dip in enumerate(active_dips):
-                    dip["timecourse"] = fixed_timecourses[i]
+                    dip["timecourse"] = stc.data[i]
                     dip["orientation"] = dip["dip"].ori.repeat(len(stc.times), axis=0)
             elif self._multi_dipole_method == "Multi dipole (MNE)":
                 inv = make_inverse_operator(
-                    self._evoked.info,
-                    this_fwd,
-                    self._cov,
-                    fixed=False,
-                    loose=1.0,
+                    info=self._evoked.info,
+                    forward=this_fwd,
+                    noise_cov=self._cov,
+                    loose=0,
                     depth=0,
                     rank=self._rank,
                 )
-                stc = apply_inverse(
-                    self._evoked,
-                    inv,
-                    method="MNE",
-                    lambda2=1e-6,
-                    pick_ori="vector",
-                )
-
-                timecourses = stc.magnitude().data
-                orientations = (stc.data / timecourses[:, np.newaxis, :]).transpose(
-                    0, 2, 1
-                )
-                fixed_timecourses = stc.project(
-                    np.array([dip["dip"].ori[0] for dip in active_dips])
-                )[0].data
-
+                stc = apply_inverse(self._evoked, inv, method="MNE", lambda2=1e-6)
                 for i, dip in enumerate(active_dips):
-                    if dip["fix_ori"]:
-                        dip["timecourse"] = fixed_timecourses[i]
-                        dip["orientation"] = dip["dip"].ori.repeat(
-                            len(stc.times), axis=0
-                        )
-                    else:
-                        dip["timecourse"] = timecourses[i]
-                        dip["orientation"] = orientations[i]
+                    dip["timecourse"] = stc.data[i]
+                    dip["orientation"] = dip["dip"].ori.repeat(len(stc.times), axis=0)
             else:
                 assert self._multi_dipole_method == "Single dipole"  # only other option
                 for dip in active_dips:
@@ -1079,20 +1035,16 @@ class DipoleFitUI:
                         self._cov,
                         self._bem,
                         pos=dip["dip"].pos[0],  # position is always fixed
-                        ori=dip["dip"].ori[0] if dip["fix_ori"] else None,
+                        ori=dip["dip"].ori[0],
                         trans=self._head_mri_t,
                         rank=self._rank,
                         n_jobs=self._n_jobs,
                         verbose=True,
                     )
-                    if dip["fix_ori"]:
-                        dip["timecourse"] = dip_with_timecourse.data[0]
-                        dip["orientation"] = dip["dip"].ori.repeat(
-                            len(dip_with_timecourse.times), axis=0
-                        )
-                    else:
-                        dip["timecourse"] = dip_with_timecourse.amplitude
-                        dip["orientation"] = dip_with_timecourse.ori
+                    dip["timecourse"] = dip_with_timecourse.data[0]
+                    dip["orientation"] = dip["dip"].ori.repeat(
+                        len(dip_with_timecourse.times), axis=0
+                    )
 
             # Update matplotlib canvas at the bottom of the window. Timecourses are
             # stored in SI units (Am), but shown in nAm, hence the 1e9 scaling at the
@@ -1308,11 +1260,6 @@ class DipoleFitUI:
         """Set the name of a dipole."""
         self._dipoles[dip_num]["dip"].name = name
         self._renderer._mplcanvas.update_plot()
-
-    def _on_dipole_toggle_fix_orientation(self, fix, dip_num):
-        """Fix dipole orientation when fitting timecourse."""
-        self._dipoles[dip_num]["fix_ori"] = bool(fix)
-        self._fit_timecourses()
 
     def _on_dipole_delete(self, dip_num):
         """Delete previously fitted dipole."""
